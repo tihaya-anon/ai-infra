@@ -76,7 +76,7 @@ make --version
 建议沿着一个 AIJob 的生命周期阅读，而不是一开始逐行阅读全部代码：
 
 ```mermaid
-flowchart LR
+flowchart TD
     Example[1. examples/aijob.yaml] --> CRD[2. deploy/crd.yaml]
     CRD --> Model[3. internal/aijob/model.go]
     Model --> Main[4. cmd/ai-infra-lab/main.go]
