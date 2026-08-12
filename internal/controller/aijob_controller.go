@@ -18,6 +18,7 @@ import (
 	jobsetv1alpha2 "sigs.k8s.io/jobset/api/jobset/v1alpha2"
 )
 
+// SchedulerName selects the scheduler profile containing the GPU topology plugin.
 const SchedulerName = "ai-scheduler"
 
 var _ reconcile.Reconciler = &AIJobReconciler{}
@@ -95,6 +96,8 @@ func desiredJobSet(job *aiv1alpha1.AIJob) *jobsetv1alpha2.JobSet {
 	}
 }
 
+// reconcileLabels changes only labels owned by this controller. Kueue and other
+// reconcilers may add fields to the same JobSet independently.
 func reconcileLabels(actual, desired *jobsetv1alpha2.JobSet) {
 	if actual.Labels == nil {
 		actual.Labels = make(map[string]string, 2)
@@ -159,6 +162,7 @@ func schedulingAnnotations(preference string) map[string]string {
 	return nil
 }
 
+// statusFromJobSet exposes the standard JobSet conditions through the AIJob API.
 func statusFromJobSet(generation int64, jobSet *jobsetv1alpha2.JobSet) aiv1alpha1.AIJobStatus {
 	status := aiv1alpha1.AIJobStatus{ObservedGeneration: generation}
 	if len(jobSet.Status.Conditions) == 0 {

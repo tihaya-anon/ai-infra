@@ -1,5 +1,6 @@
 CLUSTER ?= ai-infra-lab
 IMAGE ?= ai-infra-lab:dev
+RUNTIME_IMAGE ?= m.daocloud.io/gcr.io/distroless/static-debian12:nonroot
 JOBSET_VERSION ?= v0.10.1
 KUEUE_VERSION ?= v0.14.3
 
@@ -12,7 +13,7 @@ build:
 	go build ./cmd/controller ./cmd/scheduler ./cmd/worker
 
 image:
-	docker build -t $(IMAGE) .
+	docker build --build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) -t $(IMAGE) .
 
 cluster:
 	kind create cluster --name $(CLUSTER) --config kind.yaml

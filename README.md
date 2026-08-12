@@ -6,14 +6,16 @@
 
 ```bash
 make test
-make cluster
-make deploy
+make cluster CLUSTER=ai-infra-lab-v134
+make deploy CLUSTER=ai-infra-lab-v134
 make demo
 kubectl get aijob,pods -o wide
 ```
 
+实验固定使用 Kubernetes 1.34.8。构建默认通过 DaoCloud 代理获取 `gcr.io` 的 distroless 基础镜像；切回官方源可传入 `RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot`。完整的环境要求、组件职责和排错方式见教程。
+
 清理实验集群：
 
 ```bash
-make clean
+make clean CLUSTER=ai-infra-lab-v134
 ```

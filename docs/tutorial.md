@@ -300,12 +300,61 @@ profiles:
 
 本地实验固定使用 Kubernetes 1.34.8、Go 1.24、JobSet 0.10.1 和 Kueue 0.14.3，还需要 Docker、kubectl、kind、make 和 Bash，不需要真实 GPU。Go 依赖使用 Kubernetes 1.34.1，和集群保持相同 minor；`make deploy` 会安装固定版本的 JobSet 和 Kueue。
 
+先确认本地工具可用：
+
+```bash
+docker version
+kubectl version --client
+kind version
+go version
+```
+
+项目的运行顺序如下。建议为实验集群指定独立名称，避免覆盖本机已有的 kind 集群：
+
 ```bash
 make test
-make cluster
-make deploy
+make cluster CLUSTER=ai-infra-lab-v134
+kubectl config current-context
+make deploy CLUSTER=ai-infra-lab-v134
 make demo
 ```
+
+`make cluster` 会把当前 kubectl context 切换到新集群。`make deploy` 中的 kubectl 命令使用当前 context，因此部署前应确认输出是 `kind-ai-infra-lab-v134`。`CLUSTER` 参数同时告诉 kind 应把本地业务镜像加载到哪个集群。
+
+部署顺序是：
+
+```mermaid
+flowchart TD
+    Build[构建 controller scheduler worker 镜像]
+    Load[加载镜像到 kind 节点]
+    JobSet[安装 JobSet CRD 与 Controller]
+    Kueue[安装 Kueue CRD 与 Controller]
+    AIJob[安装 AIJob CRD RBAC 与 Controller]
+    Scheduler[安装自定义 kube-scheduler]
+    Demo[标记模拟 GPU Node 并提交 AIJob]
+
+    Build --> Load
+    Load --> JobSet
+    JobSet --> Kueue
+    Kueue --> AIJob
+    AIJob --> Scheduler
+    Scheduler --> Demo
+```
+
+### 镜像源
+
+构建阶段包含两个来源：
+
+- `golang:1.24.0` 来自 Docker Hub，可以使用 Docker daemon 的 `registry-mirrors` 加速；
+- distroless 原始镜像位于 `gcr.io`，Docker Hub mirror 不会代理它。
+
+本项目默认通过 `m.daocloud.io` 获取 distroless。该地址是用于本地实验的第三方代理；生产构建应使用组织自己的可信镜像仓库，并按 digest 固定基础镜像。切回官方地址：
+
+```bash
+make image RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
+```
+
+`make deploy` 还会从 GitHub Release 安装 JobSet 和 Kueue 清单，这部分也不经过 Docker Hub mirror。
 
 kind 没有 GPU Device Plugin。`scripts/label-nodes.sh` 会：
 
@@ -325,10 +374,32 @@ kubectl -n ai-infra-system logs deployment/aijob-controller
 kubectl -n ai-infra-system logs deployment/ai-scheduler
 ```
 
+一个正常运行的示例会经历 `AIJob -> JobSet -> Workload -> Job -> Pod`。可用下面的命令沿资源所有权逐层检查，而不是只看最终 Pod：
+
+```bash
+kubectl get aijob demo-training -o yaml
+kubectl get jobset demo-training -o yaml
+kubectl get workloads.kueue.x-k8s.io
+kubectl get jobs,pods -l infra.example.io/aijob=demo-training -o wide
+```
+
+### 常见问题
+
+如果 kind 节点日志出现 `Failed to create control group inotify object: Too many open files`，检查 WSL 的 inotify instance 上限：
+
+```bash
+sysctl fs.inotify.max_user_instances
+sudo sysctl -w fs.inotify.max_user_instances=1024
+```
+
+这是宿主机 inotify instance 耗尽，不是节点镜像损坏。第二条只修改当前运行时；需要永久保留时，应通过 WSL 的系统配置管理，而不是写入项目脚本。
+
+如果基础镜像报 DNS 或超时错误，先根据错误中的 registry 判断来源。`docker.io` 可以检查 daemon mirror，`gcr.io` 则应检查 `RUNTIME_IMAGE` 是否使用可访问的显式代理地址。
+
 删除实验环境：
 
 ```bash
-make clean
+make clean CLUSTER=ai-infra-lab-v134
 ```
 
 ## 九、什么时候才写自定义扩展

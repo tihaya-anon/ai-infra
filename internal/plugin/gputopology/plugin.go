@@ -11,6 +11,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
+// Name is the identifier used in the scheduler registry and profile config.
 const Name = "GPUTopology"
 
 var _ framework.ScorePlugin = &Plugin{}
@@ -23,6 +24,7 @@ func New(_ context.Context, _ runtime.Object, _ framework.Handle) (framework.Plu
 	return &Plugin{}, nil
 }
 
+// Name implements framework.Plugin.
 func (p *Plugin) Name() string { return Name }
 
 // Score ranks a feasible Node without replacing kube-scheduler's default checks.
@@ -34,6 +36,7 @@ func (p *Plugin) Score(_ context.Context, _ fwk.CycleState, pod *corev1.Pod, nod
 	return topologyScore(preference(pod), node.Labels), nil
 }
 
+// ScoreExtensions reports that this plugin does not normalize scores.
 func (p *Plugin) ScoreExtensions() framework.ScoreExtensions { return nil }
 
 func preference(pod *corev1.Pod) string {
