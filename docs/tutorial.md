@@ -242,6 +242,9 @@ command := app.NewSchedulerCommand(
 profiles:
   - schedulerName: ai-scheduler
     plugins:
+      preScore:
+        enabled:
+          - name: GPUTopology
       score:
         enabled:
           - name: GPUTopology
@@ -250,7 +253,17 @@ profiles:
 
 最终 Node 总分由默认插件分数和 `GPUTopology * 5` 共同决定。
 
+实现某个 Go 接口不等于自动启用对应扩展点。这里必须同时在 `preScore` 和 `score` 中配置插件；否则 `PreScore` 不会写入 `CycleState`，后续 `Score` 就无法读取预计算结果。
+
 这个实验额外运行一个名为 `ai-scheduler` 的完整 kube-scheduler，不修改 kind 自带的 `default-scheduler`。普通 Pod 不受影响，AIJob Worker 通过 `spec.schedulerName: ai-scheduler` 进入该 profile。
+
+因为运行的是完整 kube-scheduler，ServiceAccount 需要的不只是 Pod 和 Node 权限。`deploy/rbac.yaml` 同时绑定：
+
+- `system:kube-scheduler`：Pod、Node、Binding、Event 等核心调度权限；
+- `system:volume-scheduler`：StorageClass、PV 和 PVC 调度权限；
+- `extension-apiserver-authentication-reader`：读取 API Server 请求头认证配置。
+
+缺少 `system:volume-scheduler` 时，即使 AIJob 不使用 PVC，默认 VolumeBinding 插件的 informer 也无法完成缓存同步，整个调度器不会开始处理 Pod。这正是复用默认调度器时需要接受的完整组件契约。
 
 ## 七、安装和运行
 
