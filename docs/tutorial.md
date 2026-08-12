@@ -36,29 +36,77 @@ spec:
 
 ## 二、生产架构的职责边界
 
+先看 Kubernetes 自身的控制面。几乎所有组件都通过 API Server 协作，而不是彼此直接调用：
+
 ```mermaid
 flowchart TD
-    User[业务方提交 AIJob]
-    API[API Server]
+    Client[kubectl 业务方和平台服务]
+    API[API Server<br/>认证 校验 Kubernetes API]
+    Etcd[etcd<br/>持久化期望状态与实际状态]
+    Watch[控制循环 Watch API 对象]
+    Reconcilers[kube-controller-manager<br/>kube-scheduler<br/>AIJob JobSet Kueue 控制器]
+    WriteBack[通过 API Server 写回<br/>新资源 决策 Status Pod Binding]
+    NodeState[API Server 中的<br/>Pod 与 Node 状态]
+    Kubelet[kubelet<br/>管理一台 Node 上的 Pod]
+    Runtime[containerd 和 OCI runtime]
+    Process[容器进程]
+
+    Client --> API
+    API --> Etcd
+    API --> Watch
+    Watch --> Reconcilers
+    Reconcilers --> WriteBack
+    WriteBack --> NodeState
+    NodeState --> Kubelet
+    Kubelet --> Runtime
+    Runtime --> Process
+```
+
+图为了保持纵向，把同一个 API Server 的“写回入口”画成了 `WriteBack` 阶段，它不是另一个组件。`etcd` 只由 API Server 直接访问。Controller、Scheduler 和 kubelet 都 Watch API 对象，再把决策或状态写回 API Server。例如 Scheduler 不会远程启动容器，它只把 Pod 绑定到选中的 Node；对应 Node 上的 kubelet 观察到绑定结果后才启动容器。
+
+在这个基础上，本项目增加了下面的资源与控制器链：
+
+```mermaid
+flowchart TD
+    User[业务方提交 YAML]
+    API[API Server<br/>保存所有 API 资源]
+    AIJob[AIJob 资源]
     Adapter[AIJob Controller<br/>翻译业务 API]
-    JobSet[JobSet Controller<br/>任务生命周期]
+    JobSet[JobSet 资源]
     Kueue[Kueue<br/>队列 配额 整组准入]
-    TAS[Topology-Aware Scheduling<br/>机架与网络域]
+    Workload[Workload 资源]
+    TAS[TAS 计算拓扑域<br/>并解除 JobSet suspend]
+    JobSetController[JobSet Controller<br/>管理分布式任务生命周期]
+    Job[Indexed Job 资源]
+    JobController[Job Controller<br/>创建并维护 Worker]
+    Pod[Worker Pod 资源]
     Scheduler[kube-scheduler<br/>选择 Node]
     Plugin[可选 Scheduler Plugin<br/>集群特有节点偏好]
-    DRA[DRA 或 Device Plugin<br/>选择和准备具体设备]
+    Binding[Pod 绑定到 Node]
     Kubelet[kubelet 启动容器]
+    Device[DRA 或 Device Plugin<br/>分配和准备具体设备]
+    Container[训练容器进程]
 
     User --> API
-    API --> Adapter
+    API --> AIJob
+    AIJob --> Adapter
     Adapter --> JobSet
     JobSet --> Kueue
-    Kueue --> TAS
-    TAS --> Scheduler
+    Kueue --> Workload
+    Workload --> TAS
+    TAS --> JobSetController
+    JobSetController --> Job
+    Job --> JobController
+    JobController --> Pod
+    Pod --> Scheduler
     Scheduler --> Plugin
-    Plugin --> DRA
-    DRA --> Kubelet
+    Plugin --> Binding
+    Binding --> Kubelet
+    Kubelet --> Device
+    Device --> Container
 ```
+
+为保持图可读，第二张图省略了每个资源与 API Server 之间反复的 Watch/Write 箭头；图中的 `AIJob`、`JobSet`、`Workload`、`Job`、`Pod` 都实际保存在 API Server 中。关键点是：业务方只创建 `AIJob`，真正被 kube-scheduler 调度的是最下游的 Worker `Pod`。
 
 ### AIJob Controller
 
@@ -144,47 +192,83 @@ status:
 
 ## 四、先理解 GPU 为什么需要互连
 
-### 先建立物理层级：Rack、Node、Socket 与 NUMA
+### 先区分 Kubernetes 对象与物理设备
 
-这些词描述的不是同一层。先从数据中心向服务器内部逐层展开：
+Kubernetes 直接认识的是 `Pod` 和 `Node`，并不内置 `Rack` 对象。一个 Pod 最终被绑定到一个 Kubernetes Node，而这个 Node 在生产集群中通常对应一台物理服务器或虚拟机：
 
 ```mermaid
 flowchart TD
-    Cluster[Kubernetes Cluster 集群]
-    RackA[Rack A 机架]
-    RackB[Rack B 机架]
-    Node1[Node 1 服务器]
-    Node2[Node 2 服务器]
-    Socket0[CPU Socket 0]
-    Socket1[CPU Socket 1]
-    NUMA0[NUMA Node 0]
-    NUMA1[NUMA Node 1]
-    Memory0[本地内存]
-    Memory1[本地内存]
-    GPU01[GPU 与网卡]
-    GPU23[GPU 与网卡]
+    AIJob[AIJob 请求四个 Worker]
+    Controllers[AIJob JobSet 和 Job Controller]
+    Pods[四个 Worker Pod<br/>Kubernetes 调度单位]
+    Kueue[Kueue TAS<br/>读取 Node 拓扑标签]
+    Scheduler[kube-scheduler<br/>逐个为 Pod 选择 Node]
+    Candidates[候选 Node<br/>Node A rack-a<br/>Node B rack-a<br/>Node C rack-b]
+    Binding[Pod Binding<br/>记录选中的 Node]
+    Selected[选中的 Kubernetes Node]
+    Kubelet[kubelet 在该 Node 启动 Pod]
+    Running[Running Pod 与训练容器]
 
-    Cluster --> RackA
-    Cluster --> RackB
-    RackA --> Node1
-    RackA --> Node2
-    Node1 --> Socket0
-    Node1 --> Socket1
-    Socket0 --> NUMA0
-    Socket1 --> NUMA1
-    NUMA0 --> Memory0
-    NUMA0 --> GPU01
-    NUMA1 --> Memory1
-    NUMA1 --> GPU23
+    AIJob --> Controllers
+    Controllers --> Pods
+    Pods --> Kueue
+    Kueue --> Scheduler
+    Scheduler --> Candidates
+    Candidates --> Binding
+    Binding --> Selected
+    Selected --> Kubelet
+    Kubelet --> Running
 ```
+
+这里的 `rack=rack-a` 是普通 Node label。集群管理员、机房资产系统或基础设施控制器根据真实机房信息写入标签；API Server 只保存这个字符串，并不知道“机架”的物理含义。
+
+本实验通过 Kueue `Topology` 告诉 Kueue 应如何解释这些标签：
+
+```yaml
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: Topology
+spec:
+  levels:
+    - nodeLabel: infra.example.io/rack
+    - nodeLabel: kubernetes.io/hostname
+```
+
+Kueue 因此先按 `infra.example.io/rack` 分组，再按主机名区分 Node。`same-rack` 的语义来自 AIJob Controller 与这份 Kueue 配置，不是 Kubernetes 内置关键字。
+
+### Rack 与服务器内部是什么关系
+
+从物理世界看，Rack 包含服务器；服务器内部再包含 CPU、内存、PCIe 设备和 GPU。Kubernetes Node 是对整台服务器的逻辑表示，不是 Rack 的子资源：
+
+```mermaid
+flowchart TD
+    Rack[Rack 物理机架<br/>供电 散热 ToR 交换机]
+    Server[物理服务器<br/>注册为一个 Kubernetes Node]
+    NUMA[服务器内部 NUMA 拓扑<br/>NUMA 0: Socket 0 与本地内存<br/>NUMA 1: Socket 1 与本地内存]
+    PCIe[设备拓扑<br/>每个 NUMA 域连接本地 PCIe Root]
+    GPUs[GPU 与网卡<br/>连接在对应 PCIe Root 或 NVLink Fabric]
+    Pod[已绑定到这台 Node 的 Pod]
+    Container[Pod 中的训练容器]
+    Device[设备驱动分配具体 GPU]
+
+    Rack --> Server
+    Server --> NUMA
+    NUMA --> PCIe
+    PCIe --> GPUs
+    GPUs --> Device
+    Device --> Pod
+    Pod --> Container
+```
+
+这张图混合了两类有方向的关系：`Rack -> Server -> NUMA -> PCIe -> GPU` 是物理包含和连接；`GPU -> 设备驱动 -> Pod -> 容器` 是设备分配及使用链。Pod 已通过上一张图绑定到这台服务器，本图继续展开该服务器内部的数据路径。
 
 各层可以这样理解：
 
 | 名称 | 是什么 | 本项目如何表示 |
 | --- | --- | --- |
-| Cluster | 由 Kubernetes 管理的一组服务器 | 整个 kind 集群 |
-| Rack | 数据中心里安装多台服务器、交换机和供电设备的物理机柜 | Node 标签 `infra.example.io/rack` |
+| Cluster | 一组共享同一个 Kubernetes 控制面的 Node | 整个 kind 集群 |
+| Rack | 安装多台服务器、交换机和供电设备的物理机柜；不是 Kubernetes 内置对象 | Node 标签 `infra.example.io/rack` 间接表达 |
 | Node | Kubernetes 注册的一台工作机器，可以是物理机或虚拟机 | `kubectl get nodes` 中的一行 |
+| Pod | Kubernetes 的最小调度单位，包含一个或多个容器 | Job Controller 为每个 Worker 创建一个 Pod |
 | CPU Socket | 主板上的一个 CPU 封装；双路服务器有两个 Socket | 本实验没有模拟 |
 | NUMA Node | 一组 CPU 核、离它们较近的内存及 PCIe 设备构成的局部域 | 本实验没有模拟 |
 | GPU | 连接在某个 PCIe/NVLink 拓扑中的具体加速设备 | 只用 `example.com/gpu` 模拟数量 |
