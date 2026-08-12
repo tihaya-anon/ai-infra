@@ -5,5 +5,6 @@ metadata:
 spec:
   workers: 4
   gpuPerWorker: 2
-  topology: same-rack
+  gpuResource: example.com/gpu
+  topology: nvlink
   image: ai-infra-lab:dev

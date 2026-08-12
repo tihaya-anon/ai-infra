@@ -1,6 +1,6 @@
-# 手写 Kubernetes Controller 与 Scheduler
+# Kubernetes AIJob Controller 与 GPU 拓扑调度插件
 
-这是一个面向 AI Infra 入门的最小可运行实验。它实现 `AIJob` CRD、Controller 和独立 Scheduler，并在 kind 节点上用 Label 模拟 GPU 容量与机架拓扑。
+这是一个面向 AI Infra 入门的最小实验：使用 controller-runtime 实现 `AIJob` Reconcile，并通过 Scheduler Framework `ScorePlugin` 扩展默认 kube-scheduler 的 GPU 拓扑偏好。
 
 先阅读 [教程](docs/tutorial.md)，再运行：
 

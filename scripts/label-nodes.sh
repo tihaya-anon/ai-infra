@@ -7,8 +7,13 @@ if (( ${#nodes[@]} < 3 )); then
   exit 1
 fi
 
-kubectl label --overwrite "${nodes[0]}" infra.example.io/gpu-capacity=4 infra.example.io/rack=rack-a
-kubectl label --overwrite "${nodes[1]}" infra.example.io/gpu-capacity=4 infra.example.io/rack=rack-a
-kubectl label --overwrite "${nodes[2]}" infra.example.io/gpu-capacity=4 infra.example.io/rack=rack-b
+kubectl label --overwrite "${nodes[0]}" infra.example.io/gpu-fabric=nvlink infra.example.io/rack=rack-a
+kubectl label --overwrite "${nodes[1]}" infra.example.io/gpu-fabric=pcie infra.example.io/rack=rack-a
+kubectl label --overwrite "${nodes[2]}" infra.example.io/gpu-fabric=pcie infra.example.io/rack=rack-b
 
-kubectl get nodes -L infra.example.io/gpu-capacity,infra.example.io/rack
+for node in "${nodes[@]:0:3}"; do
+  kubectl patch "$node" --subresource=status --type=merge \
+    -p '{"status":{"capacity":{"example.com/gpu":"4"},"allocatable":{"example.com/gpu":"4"}}}'
+done
+
+kubectl get nodes -L infra.example.io/gpu-fabric,infra.example.io/rack

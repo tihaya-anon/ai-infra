@@ -40,9 +40,12 @@ spec:
                 gpuPerWorker:
                   type: integer
                   minimum: 1
+                gpuResource:
+                  type: string
+                  default: example.com/gpu
                 topology:
                   type: string
-                  enum: [any, same-rack]
+                  enum: [any, nvlink, pcie, same-rack]
                   default: any
                 image:
                   type: string

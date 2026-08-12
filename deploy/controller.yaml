@@ -1,21 +1,21 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ai-infra-lab
+  name: aijob-controller
   namespace: ai-infra-system
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: ai-infra-lab
+      app: aijob-controller
   template:
     metadata:
       labels:
-        app: ai-infra-lab
+        app: aijob-controller
     spec:
-      serviceAccountName: ai-infra-lab
+      serviceAccountName: aijob-controller
       containers:
-        - name: ai-infra-lab
+        - name: controller
           image: ai-infra-lab:dev
           imagePullPolicy: IfNotPresent
-          args: ["--component=all"]
+          command: ["/controller"]

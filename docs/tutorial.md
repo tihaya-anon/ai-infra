@@ -1,19 +1,12 @@
-# 从零手写 Kubernetes Controller 与 Scheduler
+# 用 Controller Runtime 与 Scheduler Framework 扩展 Kubernetes
 
-这篇教程对应 `reference/ai-infra-learning.md` 中 AIJob Operator 的第一步：不使用 Kubebuilder 和 Scheduler Framework 的代码生成，直接用 `client-go` 看清 Controller 与 Scheduler 的主循环。
+这个项目演示一条更接近生产的 AI Infra 开发路径：业务方声明 `AIJob`，Controller 将它翻译为 GPU Worker Pod，Scheduler Framework 插件在默认 kube-scheduler 的打分阶段加入 NVLink、PCIe 与机架亲和度。
 
-实验不会申请真实 GPU。每个 kind Worker Node 用两个 Label 表示硬件：
+我们不重写调度队列、资源过滤、抢占或 Bind。它们由 kube-scheduler 负责；项目只实现 AI 场景独有的扩展点。
 
-```text
-infra.example.io/gpu-capacity=4
-infra.example.io/rack=rack-a
-```
+## 一、业务方如何使用
 
-Worker Pod 上的 `infra.example.io/gpu-request=2` 表示需要两张模拟 GPU。Scheduler 自己统计已绑定 Pod 的占用量。
-
-## 一、最终会发生什么
-
-提交一个 AIJob：
+平台组件安装完成后，训练业务只提交 YAML：
 
 ```yaml
 apiVersion: infra.example.io/v1alpha1
@@ -23,272 +16,308 @@ metadata:
 spec:
   workers: 4
   gpuPerWorker: 2
-  topology: same-rack
+  gpuResource: nvidia.com/gpu
+  topology: nvlink
+  image: registry.example.com/training:v1
 ```
 
-系统中的数据流是：
+字段表达的是业务意图：
 
-```mermaid
-flowchart TD
-    CLI[kubectl apply AIJob] --> API[API Server]
-    API --> AIJobInformer[AIJob Informer]
-    AIJobInformer --> ControllerQueue[Controller Workqueue]
-    ControllerQueue --> Reconcile[Controller Reconcile]
-    Reconcile --> Workers[创建 4 个未绑定 Worker Pod]
-    Workers --> API
-    API --> PodInformer[Pod Informer]
-    PodInformer --> SchedulerQueue[Scheduler Workqueue]
-    SchedulerQueue --> Filter[Filter 节点]
-    Filter --> Score[Score 节点]
-    Score --> Bind[Bind Pod 到 Node]
-    Bind --> API
-    API --> Kubelet[kubelet 启动容器]
-```
+- `workers`：分布式训练的 Worker 数量；
+- `gpuPerWorker`：每个 Worker 请求的 GPU 数量；
+- `gpuResource`：Device Plugin 上报的扩展资源名；
+- `topology`：`nvlink`、`pcie` 或 `same-rack`；
+- `image`：训练镜像。
 
-Controller 决定“应该存在几个 Worker”，Scheduler 决定“每个 Worker 放到哪台 Node”。二者都只通过 API Server 协作，不直接调用对方。
-
-## 二、准备环境
-
-需要：
-
-- Go 1.22 或更高版本；
-- Docker；
-- kubectl；
-- kind；
-- make 和 Bash。
-
-仓库当前环境已经有 Go、Docker、kubectl、kind、make 和 Bash，不需要额外安装工具。首次执行 `go mod download`、Docker 构建和 kind 集群创建仍需要网络下载 Go 模块及容器镜像。
-
-检查版本：
-
-```bash
-go version
-docker info
-kubectl version --client
-kind version
-make --version
-```
-
-不需要安装 Kubebuilder、Operator SDK、Helm、真实 NVIDIA Driver 或 Device Plugin。
-
-## 三、项目结构与阅读顺序
-
-建议沿着一个 AIJob 的生命周期阅读，而不是一开始逐行阅读全部代码：
-
-```mermaid
-flowchart TD
-    Example[1. examples/aijob.yaml] --> CRD[2. deploy/crd.yaml]
-    CRD --> Model[3. internal/aijob/model.go]
-    Model --> Main[4. cmd/ai-infra-lab/main.go]
-    Main --> Controller[5. internal/controller/controller.go]
-    Controller --> Scheduler[6. internal/scheduler/scheduler.go]
-    Scheduler --> Tests[7. internal/scheduler/scheduler_test.go]
-    Tests --> Deploy[8. deploy 与 scripts]
-```
-
-1. `examples/aijob.yaml`：先看用户提交什么，明确输入是 Worker 数量、单 Worker GPU 请求和拓扑偏好。
-2. `deploy/crd.yaml`：再看 API Server 如何校验这些字段，以及 status 子资源如何声明。
-3. `internal/aijob/model.go`：理解 Dynamic Client 返回的非结构化对象如何转换成程序内部的 `Spec`。
-4. `cmd/ai-infra-lab/main.go` 和 `internal/kube/config.go`：看进程如何选择组件，并在集群内外建立 Kubernetes Client。
-5. `internal/controller/controller.go`：按 `New -> Run -> enqueue -> processNext -> reconcile` 阅读，跟踪 AIJob 如何变成 Worker Pod。
-6. `internal/scheduler/scheduler.go`：按 `New -> Run -> enqueue -> schedule -> chooseNode -> Bind` 阅读，跟踪未绑定 Pod 如何选择 Node。
-7. `internal/scheduler/scheduler_test.go`：用三个小场景验证 bin packing、same-rack 和容量不足，比直接进入 kind 调试更容易理解策略。
-8. `deploy/rbac.yaml`、`deploy/deployment.yaml`、`scripts/label-nodes.sh` 和 `Makefile`：最后看组件需要什么权限，以及本地集群如何组装和运行。
-
-第一次阅读先抓住 Controller 与 Scheduler 两条主链即可。`Dockerfile`、`.dockerignore` 和 `kind.yaml` 属于运行环境细节，可以在执行实验时再看。
-
-## 四、先看 CRD：给 Kubernetes 增加 AIJob 类型
-
-`deploy/crd.yaml` 定义 `infra.example.io/v1alpha1` API。最重要的是 schema 与 status 子资源：
+业务方不创建 Pod，也不直接选择 Scheduler。Controller 统一生成 Worker Pod并写入：
 
 ```yaml
-subresources:
-  status: {}
-schema:
-  openAPIV3Schema:
-    properties:
-      spec:
-        required: [workers, gpuPerWorker]
+spec:
+  schedulerName: ai-scheduler
+  containers:
+    - resources:
+        limits:
+          nvidia.com/gpu: 2
+metadata:
+  annotations:
+    infra.example.io/gpu-topology: nvlink
 ```
 
-API Server 会拒绝 `workers: 0` 等非法输入。开启 status 子资源后，Controller 可以更新 `.status`，而不改动用户提交的 `.spec`。
+## 二、系统分工
 
-这里故意使用 Dynamic Client 读取 CRD，因此不用生成 Go 类型、DeepCopy 和 Clientset。代价是字段读取缺少编译期类型检查；生产 Operator 通常会使用代码生成。
+```mermaid
+flowchart TD
+    User[业务方提交 AIJob]
+    API[API Server]
+    Controller[controller-runtime AIJobReconciler]
+    Pod[Worker Pod]
+    Scheduler[完整 kube-scheduler]
+    Defaults[默认插件: 资源 污点 亲和性 Volume 抢占]
+    GPU[GPUTopology ScorePlugin]
+    Bind[默认 Bind 插件]
+    Kubelet[kubelet 启动 Worker]
 
-## 五、手写 Controller
+    User --> API
+    API --> Controller
+    Controller --> Pod
+    Pod --> Scheduler
+    Scheduler --> Defaults
+    Defaults --> GPU
+    GPU --> Bind
+    Bind --> Kubelet
+```
 
-入口在 `internal/controller/controller.go`。一个 Controller 有四个核心部件：
+Controller 回答“AIJob 应该产生哪些 Pod”。Scheduler 插件回答“通过默认硬约束的 Node 中，哪个 GPU 拓扑更合适”。
 
-1. Informer：List/Watch API 对象，并维护本地缓存；
-2. Event Handler：把发生变化的对象转换成 `namespace/name`；
-3. Workqueue：去重、削峰，并为失败项提供指数退避重试；
-4. Reconcile：比较期望状态与实际状态，执行最小修改。
+### 为什么插件不直接读取 AIJob
 
-启动流程是：
+Scheduler Framework 的核心输入是 Pod 和 Node，而不是任意 CRD。Controller 负责做一次 API 翻译：
+
+```mermaid
+flowchart TD
+    AIJob[AIJob topology: nvlink]
+    Reconcile[AIJobReconciler]
+    Annotation[Pod annotation: gpu-topology=nvlink]
+    Plugin[GPUTopology Plugin]
+    Labels[Node labels: fabric/rack]
+    Score[Node Score]
+
+    AIJob --> Reconcile
+    Reconcile --> Annotation
+    Annotation --> Plugin
+    Labels --> Plugin
+    Plugin --> Score
+```
+
+这样 Scheduler 插件不依赖 AIJob Client，也不需要在每次节点打分时访问 API Server。
+
+## 三、项目阅读顺序
+
+```mermaid
+flowchart TD
+    Example[1. examples/aijob.yaml]
+    CRD[2. deploy/crd.yaml]
+    Types[3. api/v1alpha1]
+    Controller[4. internal/controller]
+    Plugin[5. internal/plugin/gputopology]
+    Register[6. cmd/scheduler/main.go]
+    Config[7. deploy/scheduler-config.yaml]
+    Runtime[8. deploy 与 scripts]
+
+    Example --> CRD
+    CRD --> Types
+    Types --> Controller
+    Controller --> Plugin
+    Plugin --> Register
+    Register --> Config
+    Config --> Runtime
+```
+
+1. `examples/aijob.yaml`：先看业务方声明什么。
+2. `deploy/crd.yaml`：看 API Server 如何注册和校验 AIJob。
+3. `api/v1alpha1`：看强类型 `AIJobSpec`、`AIJobStatus` 与 Scheme 注册。
+4. `internal/controller/aijob_controller.go`：只关注 `Reconcile` 如何创建 Worker Pod。
+5. `internal/plugin/gputopology/plugin.go`：看 `PreScorePlugin` 和 `ScorePlugin` 的实现。
+6. `cmd/scheduler/main.go`：看插件如何注册到 kube-scheduler 二进制。
+7. `deploy/scheduler-config.yaml`：看 scheduler profile 如何启用插件和配置权重。
+8. `deploy/controller.yaml`、`deploy/rbac.yaml` 与 `scripts/label-nodes.sh`：最后看运行和权限。
+
+## 四、Controller：只写 Reconcile
+
+Controller 使用 `controller-runtime`。入口声明它管理 AIJob，并监听自己创建的 Pod：
 
 ```go
-c.start(ctx.Done())
-if !cache.WaitForCacheSync(ctx.Done(), c.synced) {
-    return fmt.Errorf("sync AIJob informer cache")
-}
-go wait.UntilWithContext(ctx, c.runWorker, time.Second)
+return ctrl.NewControllerManagedBy(manager).
+    For(&aiv1alpha1.AIJob{}).
+    Owns(&corev1.Pod{}).
+    Complete(r)
 ```
 
-必须先等待缓存同步。否则 Controller 可能把“缓存还没看见对象”误判成“对象不存在”。
-
-队列消费者只做三件事：取 key、调用 reconcile、决定 Forget 或重试：
+`AIJobReconciler` 实现的是 controller-runtime 的接口：
 
 ```go
-if err := c.reconcile(ctx, key); err != nil {
-    c.queue.AddRateLimited(key)
-    return true
-}
-c.queue.Forget(item)
+var _ reconcile.Reconciler = &AIJobReconciler{}
+
+func (r *AIJobReconciler) Reconcile(
+    ctx context.Context,
+    request ctrl.Request,
+) (ctrl.Result, error)
 ```
 
-Reconcile 的期望状态是 `spec.workers` 个 Pod。它先按 Label 列出现有 Worker，再补齐缺少的 Pod。Pod 名称固定为 `<aijob>-worker-<index>`，因此同一个 reconcile 重复执行不会不断创建新对象，这就是幂等性。
+Reconcile 只表达业务逻辑：
 
-每个 Worker 设置：
+1. 获取 AIJob；
+2. 列出它拥有的 Worker Pod；
+3. 创建缺少的 Worker，删除缩容后多余的 Worker；
+4. 汇总并更新 status。
+
+Informer、缓存、Workqueue、失败退避和 Worker goroutine 仍然存在，但由 controller-runtime 管理。理解它们有助于排障，不需要在入门项目中手写。
+
+OwnerReference 由下面的调用设置：
 
 ```go
-SchedulerName: "ai-scheduler"
+ctrl.SetControllerReference(job, pod, r.Scheme)
 ```
 
-默认 kube-scheduler 会忽略它，只有我们的 Scheduler 会处理。OwnerReference 则让 Kubernetes Garbage Collector 在 AIJob 删除后自动删除 Worker。
+因此删除 AIJob 后，Kubernetes Garbage Collector 会回收 Worker Pod。
 
-Controller 也监听 Worker Pod 的变化并重新入队所属 AIJob，用于聚合 `pending/running/succeeded/failed` 状态。只有新状态与旧状态不同时才调用 UpdateStatus，避免 status 更新再次触发无意义的 reconcile 循环。
+## 五、Scheduler：扩展默认调度器
 
-## 六、手写 Scheduler
+### 1. 明确实现 Framework 接口
 
-入口在 `internal/scheduler/scheduler.go`。它同样采用 Informer + Workqueue，但只接收：
-
-```text
-spec.schedulerName == ai-scheduler
-spec.nodeName == 空
-```
-
-一次调度周期分为三步。
-
-### 1. Filter：过滤不可用节点
-
-节点必须满足：
-
-```text
-gpu-capacity - 已用 GPU >= Pod 请求 GPU
-```
-
-`buildNodeStates` 从 Node Label 读取容量，再扫描仍在运行或等待启动的已绑定 Pod，累计使用量。终态 Pod 不再占用模拟 GPU。
-
-### 2. Score：给可用节点打分
-
-本实验的分数为：
-
-```text
-score = 已使用 GPU * 10
-if 与同一 AIJob 的已有 Worker 同机架:
-    score += 1000
-```
-
-“已使用 GPU 越多，分越高”是一种 bin packing：先填满部分节点，保留完整空闲节点，减少资源碎片。`same-rack` 奖励则演示拓扑感知。两个目标都是软约束，因为即使同机架放不下，任务仍可退化到其他机架。
-
-### 3. Bind：提交调度结果
-
-Scheduler 不直接修改 Pod 的 `spec.nodeName`，而是创建 Binding：
+插件包含编译期接口断言：
 
 ```go
-binding := &corev1.Binding{
-    Target: corev1.ObjectReference{Kind: "Node", Name: node},
-}
-client.CoreV1().Pods(namespace).Bind(ctx, binding, metav1.CreateOptions{})
+var _ framework.PreScorePlugin = &Plugin{}
+var _ framework.ScorePlugin = &Plugin{}
 ```
 
-API Server 完成绑定后，目标 Node 上的 kubelet 才会看到 Pod 并开始创建容器。因此“调度成功”不等于“容器已经运行”。镜像拉取、Volume 挂载或容器启动仍可能失败。
+Go 没有 `implements` 关键字，只要方法集合匹配就实现接口；上述断言会在签名不匹配时直接编译失败。
 
-调度器在每次决策时直接向 API Server 查询 Pod 占用量，而不是只读 Informer 缓存。原因是 Bind 后缓存存在短暂延迟；队列中的下一个 Pod 如果读取旧缓存，可能重复使用刚刚分配的容量。生产调度器通常通过 assume/cache 机制解决，这里用直接查询保持实现容易理解。
+插件实现三个关键方法：
 
-## 七、运行完整实验
+```go
+func (p *Plugin) Name() string
+func (p *Plugin) PreScore(...) *framework.Status
+func (p *Plugin) Score(...) (int64, *framework.Status)
+```
 
-先运行单元测试：
+### 2. 为什么使用 PreScore
+
+同一 Pod 会针对许多候选 Node 调用 `Score`。`PreScore` 每个调度周期只执行一次，适合计算可复用状态。
+
+例如 `same-rack` 会先查找同一 AIJob 已运行 Worker 所在的机架，然后写入 `CycleState`：
+
+```go
+state.Write(stateKey, &cycleData{preferredRack: rack})
+```
+
+后续每次 `Score` 直接读取，不重复扫描集群快照。
+
+### 3. Score 只改变偏好
+
+插件当前使用以下简化分值：
+
+| AIJob 偏好 | Node 标签 | 分数 |
+| --- | --- | ---: |
+| `nvlink` | `gpu-fabric=nvlink` | 100 |
+| `nvlink` | `gpu-fabric=pcie` | 50 |
+| `pcie` | `gpu-fabric=nvlink` | 100 |
+| `pcie` | `gpu-fabric=pcie` | 80 |
+| `same-rack` | 与已有 Worker 同 rack | 100 |
+| 其他情况 | 无匹配 | 0 |
+
+这是软偏好，所以实现 `ScorePlugin`。如果某项要求不满足就不能运行，例如必须具备 RDMA，应使用 `FilterPlugin` 返回 `Unschedulable`，或者让 Controller 生成标准 NodeAffinity。
+
+### 4. 谁负责 GPU 容量
+
+默认 `NodeResourcesFit` 插件会检查 Pod 的扩展资源请求：
+
+```yaml
+limits:
+  nvidia.com/gpu: 2
+```
+
+因此本插件不重复统计 GPU。它也不处理 Taint、Volume、CPU、内存和抢占，这些继续由默认插件负责。
+
+### 5. 谁选择具体 GPU
+
+Scheduler 选择的是 Node，不是 Node 内的 GPU 编号。具体分配哪张 GPU 通常由 Device Plugin 或 DRA 完成。NVLink/PCIe 拓扑如果只以 Node Label 表达，插件只能选择机器或拓扑域；要精确选择设备，需要结合 DRA、CDI 或厂商设备管理能力。
+
+## 六、注册插件
+
+Scheduler Framework 插件需要编译进 kube-scheduler 二进制，不是运行时上传一个 `.so` 文件。
+
+`cmd/scheduler/main.go` 复用官方 kube-scheduler，并注册一个 out-of-tree 插件工厂：
+
+```go
+command := app.NewSchedulerCommand(
+    app.WithPlugin(gputopology.Name, gputopology.New),
+)
+```
+
+`deploy/scheduler-config.yaml` 再通过 profile 启用插件：
+
+```yaml
+profiles:
+  - schedulerName: ai-scheduler
+    plugins:
+      score:
+        enabled:
+          - name: GPUTopology
+            weight: 5
+```
+
+最终 Node 总分由默认插件分数和 `GPUTopology * 5` 共同决定。
+
+这个实验额外运行一个名为 `ai-scheduler` 的完整 kube-scheduler，不修改 kind 自带的 `default-scheduler`。普通 Pod 不受影响，AIJob Worker 通过 `spec.schedulerName: ai-scheduler` 进入该 profile。
+
+## 七、安装和运行
+
+需要 Go 1.22+、Docker、kubectl、kind、make 和 Bash，不需要 Kubebuilder、Operator SDK 或真实 GPU。
 
 ```bash
 make test
-```
-
-测试覆盖 bin packing、same-rack 偏好和容量不足三个核心决策。
-
-创建一个有三个 Worker Node 的集群：
-
-```bash
 make cluster
-```
-
-`kind.yaml` 将节点版本固定为 Kubernetes 1.30，与 `client-go v0.30` 对齐。首次创建会拉取 `kindest/node:v1.30.13`；若网络较慢，可先运行 `docker pull kindest/node:v1.30.13` 后重试。
-
-构建镜像、加载到 kind、安装 CRD/RBAC 和 Deployment：
-
-```bash
 make deploy
-```
-
-给三个 Worker Node 标记模拟资源并提交 AIJob：
-
-```bash
 make demo
 ```
+
+kind 没有 GPU Device Plugin。`scripts/label-nodes.sh` 会进行两种模拟：
+
+1. 给 Node 添加 `gpu-fabric` 和 `rack` 标签；
+2. 在 Node status 中加入 `example.com/gpu: 4` 扩展资源。
+
+示例 AIJob 因此使用：
+
+```yaml
+gpuResource: example.com/gpu
+```
+
+生产环境应改为 Device Plugin 实际上报的 `nvidia.com/gpu` 等资源。
 
 观察结果：
 
 ```bash
-kubectl get nodes -L infra.example.io/gpu-capacity,infra.example.io/rack
 kubectl get aijob
 kubectl get pods -o wide
-kubectl -n ai-infra-system logs deployment/ai-infra-lab -f
+kubectl get nodes -L infra.example.io/gpu-fabric,infra.example.io/rack
+kubectl -n ai-infra-system logs deployment/aijob-controller
+kubectl -n ai-infra-system logs deployment/ai-scheduler
 ```
 
-四个 Worker 每个请求两张模拟 GPU。正常情况下，它们会优先装满 `rack-a` 的两台四卡 Node，而保留 `rack-b` Node。
-
-删除 AIJob，验证 OwnerReference 级联清理：
-
-```bash
-kubectl delete aijob demo-training
-kubectl get pods
-```
-
-最后删除实验集群：
+删除实验环境：
 
 ```bash
 make clean
 ```
 
-## 八、动手改三个实验
+## 八、扩展点怎么选
 
-### 实验 A：制造资源不足
+| 需求 | 扩展点 |
+| --- | --- |
+| 预计算作业已有 Worker 的拓扑 | `PreScore` |
+| 偏好 NVLink、同机架或模型缓存命中 | `Score` |
+| 必须有 RDMA、特定 GPU 型号或显存规格 | `Filter` |
+| 整组 Worker 同时放行 | `Reserve` + `Permit` |
+| 失败时释放 Gang 预留 | `Unreserve` |
+| 自定义队列公平性 | `QueueSort`，但每个 profile 只能有一个 |
+| 绑定前准备网络或设备 | `PreBind` |
 
-把 `workers` 改成 7。集群模拟容量为 12 张 GPU，总请求为 14 张。前六个 Worker 能绑定，最后一个持续 Pending，Scheduler 日志会输出 `no node has 2 simulated GPUs available`。
+本项目先只实现 `PreScore + Score`，因为“默认调度器已经能运行 Pod，但不理解 AI 拓扑偏好”正是最小且合理的扩展边界。
 
-思考：已经运行的六个 Worker 是否产生有效训练进度？这会自然引出 Gang Scheduling。
+## 九、版本与生产边界
 
-### 实验 B：观察碎片
+Scheduler Framework 插件与 Kubernetes 内部包紧密耦合。本项目将 Kubernetes、`client-go`、controller-runtime 和 kind 节点锁定到 1.30 对应版本，并在 `go.mod` 显式对齐 staging modules。升级集群时应同步升级插件并重新编译测试。
 
-把不同 AIJob 的 `gpuPerWorker` 改成 1、2、3，比较当前 bin packing 与“选择剩余容量最多节点”的 spread 策略。记录一个四卡任务是否还能找到完整节点。
+生产化还应补充：
 
-### 实验 C：把软拓扑改成硬约束
+- 用 Kubebuilder/controller-gen 生成 DeepCopy、CRD 和 RBAC；
+- Controller 与 Scheduler Leader Election；
+- Node Feature Discovery 或厂商组件自动维护拓扑标签；
+- Scheduler 插件配置类型、指标、Event 和调度性能测试；
+- 对缺失/过期拓扑信息定义降级策略；
+- Gang Scheduling 的 Reserve、Permit 和 Unreserve；
+- 基于 DRA 的设备级拓扑分配。
 
-当前 same-rack 只是加 1000 分。尝试在 Filter 阶段直接排除其他机架，再制造同机架容量不足。
-
-思考：拓扑收益与可调度性冲突时，应该拒绝任务、降级放置，还是等待资源？
-
-## 九、这个实验刻意没有实现什么
-
-它用于展示机制，不是生产调度器。生产化至少还需要：
-
-- 默认 Scheduler 的 NodeSelector、Affinity、Taint/Toleration、资源、Volume 等完整谓词；
-- Scheduler cache/assume、Bind 失败回滚和并发调度；
-- Leader Election，保证多副本只有一个实例执行关键操作；
-- Event 与 Condition，让 Pending 原因可被用户直接观察；
-- Resource Request 或 Device Plugin，而不是用 Label 模拟 GPU；
-- Gang Scheduling 的整组准入、Reserve、Permit 与回滚；
-- Queue、Quota、Priority、Preemption、公平性和可观测性；
-- Webhook 默认值和校验，以及生成的 typed client。
-
-下一步最值得做的是 Gang Scheduling：Controller 给一组 Worker 标记共同的作业身份；Scheduler 在绑定任何 Worker 前确认整组资源可满足，先 Reserve，失败时 Unreserve。这样可以把本实验中“第七个 Worker 永远 Pending，而前六个空占 GPU”的问题闭环解决。
+本项目的重点不再是复刻 Kubernetes 控制循环，而是展示两个稳定扩展面：用 Controller Runtime 扩展声明式 API，用 Scheduler Framework 扩展默认调度决策。

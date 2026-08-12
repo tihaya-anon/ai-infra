@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-scheduler-config
+  namespace: ai-infra-system
+data:
+  config.yaml: |
+    apiVersion: kubescheduler.config.k8s.io/v1
+    kind: KubeSchedulerConfiguration
+    clientConnection:
+      kubeconfig: ""
+    leaderElection:
+      leaderElect: false
+    profiles:
+      - schedulerName: ai-scheduler
+        plugins:
+          score:
+            enabled:
+              - name: GPUTopology
+                weight: 5
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-scheduler
+  namespace: ai-infra-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-scheduler
+  template:
+    metadata:
+      labels:
+        app: ai-scheduler
+    spec:
+      serviceAccountName: ai-scheduler
+      containers:
+        - name: scheduler
+          image: ai-infra-lab:dev
+          imagePullPolicy: IfNotPresent
+          command: ["/scheduler"]
+          args: ["--config=/etc/kubernetes/config.yaml"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/kubernetes
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: ai-scheduler-config
