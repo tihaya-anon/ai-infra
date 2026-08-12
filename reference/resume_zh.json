@@ -1,0 +1,170 @@
+{
+  "basics": {
+    "name": "罗宇翔",
+    "email": "1625436933@qq.com",
+    "phone": "+86 13544005436"
+  },
+  "education": [
+    {
+      "institution": "同济大学",
+      "area": "信息管理与信息系统",
+      "studyType": "本科",
+      "startDate": "2021-09",
+      "endDate": "2025-07"
+    },
+    {
+      "institution": "香港大学",
+      "area": "计算机科学",
+      "studyType": "硕士",
+      "startDate": "2025-09",
+      "endDate": "2026-11"
+    }
+  ],
+  "work": [
+    {
+      "name": "韶音科技",
+      "location": "广东深圳",
+      "position": "数据工程实习生 - Lakehouse 与 DevOps",
+      "startDate": "2026-04",
+      "endDate": "至今",
+      "highlights": [
+        "以 Dagster 作为统一控制面构建 AWS Lakehouse 编排层；将数据采集与数据湖处理拆分为独立 Code Location，避免单一部署单元的无关改动波及整条链路，缩小发布包体积与影响范围",
+        "基于 ECS Fargate 容器和 Python dlt 实现仅追加的数据采集，并按实际用量计费；相较于常驻计算资源，为低频任务避免长期闲置成本",
+        "围绕 AWS Glue Catalog、Iceberg compaction 与 Glue PySpark ETL 构建数据湖运行时；以 Dagster Asset 驱动数据链路自动化，将处理逻辑与任务调度解耦，减少链路间依赖并支持并行开发",
+        "为 Lakehouse 数据资产提供可选 Redshift 同步能力，将指定 Iceberg 表全量复制为分析加速层；在不改变湖仓主存储的前提下，满足低延迟访问与交互式分析需求",
+        "构建 Source Change、Detect、CI、CD 四阶段流水线：Detect 基于 Git 变更记录识别影响范围并按需触发任务；文档改动跳过 CI/CD，运行时代码改动跳过镜像构建，由 CD 更新 EFS 并刷新 ECS，减少无效构建与部署",
+        "将 Dagster Control Plane、Code Location 与 Worker 拆分为 3 个独立镜像；其 Docker 构建和 Terraform apply 可并行执行，结合 Dockerfile 分层缓存、ECR pull-through cache、受影响 Stack 增量更新和 Code Location 蓝绿发布，缩短交付窗口并避免停机",
+        "建立分层交付模型：Terraform 统一管理 S3、Glue Catalog、Glue PySpark、ECS/ECR 等基础设施；Docker 固化仅含依赖库（uv.lock）的运行时环境；EFS 承载运行时代码与依赖定义。将不同类型变更按层隔离后，无需每次触发全量约 30 分钟的 Terraform 部署：Terragrunt Stack 约 10 分钟、Docker 构建为分钟级，代码更新与 uv sync 为秒级"
+      ]
+    },
+    {
+      "name": "币安",
+      "location": "远程",
+      "position": "数据工程实习生 - Lambda 架构",
+      "startDate": "2025-11",
+      "endDate": "2026-04",
+      "highlights": [
+        "开发并部署覆盖 EGLD、AXL、BABY、DGB、RON 共 5 条链的 Lambda 架构数据管道，以 Java/Flink 构建实时层、Spark SQL 构建批处理层，解决单一链路难以同时兼顾实时性与历史准确性的问题",
+        "构建实时处理链路，使用 Java/Flink 消费 Kafka 事件，以 HBase 提供低延迟缓存，并将结果同步写入 StarRocks 与 Hive，使实时查询无需等待离线批处理完成",
+        "使用 Spark SQL 在 Hive 中重算 Kafka 摄取的历史数据；核对批流记录数后，以验证通过的批处理结果覆盖 StarRocks 实时结果，避免实时计算偏差长期遗留",
+        "对齐 Spark SQL 业务规则与 Java/Flink 实现，通过比对批流输出并追踪数据模式假设，消除主键、合约代币、地址、价格与精度差异，避免同一指标在批流侧出现不一致",
+        "搭建 Kafka 本地集成测试环境，在部署前验证 Flink 作业；支持聚合表上线、数据回填、历史修正、数据质量检查（DQC）改进与标签传递链路调研，将问题前移至生产发布前"
+      ]
+    },
+    {
+      "name": "蔚来汽车",
+      "location": "上海",
+      "position": "数据分析实习生 - BI",
+      "startDate": "2025-04",
+      "endDate": "2025-07",
+      "highlights": [
+        "开发 BI 应用并维护商业智能数据基础设施，提供结构化数据导出，将分散的数据获取需求收敛为可复用的数据服务，缩短运营与分析取数路径"
+      ]
+    },
+    {
+      "name": "韶音科技",
+      "location": "广东深圳",
+      "position": "数据分析实习生 - BI 与 Pandas",
+      "startDate": "2024-07",
+      "endDate": "2024-09",
+      "highlights": [
+        "开发 Power BI 仪表板用于业务绩效监控，并使用 Pandas 与 SQL 完成数据清洗和转换，替代分散的手工汇总，为业务复盘提供统一、可复用的数据视图"
+      ]
+    },
+    {
+      "name": "C-life公司",
+      "location": "广东深圳",
+      "position": "机器学习工程助理 - NLP 与 CV",
+      "startDate": "2023-07",
+      "endDate": "2023-09",
+      "highlights": [
+        "处理 NLP 数据以支持知识图谱构建与 LLM 微调，并协助开发皮肤质量评估 CV 算法，将原始数据转化为可直接用于训练和评估的模型输入"
+      ]
+    }
+  ],
+  "skills": [
+    {
+      "name": "编程语言",
+      "keywords": ["Python", "SQL", "Java", "Go", "JavaScript/TypeScript"]
+    },
+    {
+      "name": "框架",
+      "keywords": [
+        "Dagster",
+        "Spark",
+        "Flink",
+        "dlt",
+        "Spring Boot",
+        "React",
+        "Vue",
+        "Gin",
+        "Pandas"
+      ]
+    },
+    {
+      "name": "工具",
+      "keywords": [
+        "AWS",
+        "Terraform",
+        "Docker",
+        "Iceberg",
+        "Glue",
+        "Redshift",
+        "ECS",
+        "Kafka",
+        "Hive",
+        "HBase",
+        "Kubernetes"
+      ]
+    }
+  ],
+  "languages": [
+    {
+      "language": "英语",
+      "fluency": "雅思 7.5"
+    },
+    {
+      "language": "普通话",
+      "fluency": "母语"
+    },
+    {
+      "language": "粤语",
+      "fluency": "基础"
+    }
+  ],
+  "projects": [
+    {
+      "name": "区块链风险平台",
+      "description": "生产级多语言微服务平台，采用 Lambda 架构进行区块链风险分析，具备实时流处理与完整的 DevOps/SRE 实践。",
+      "highlights": [
+        "设计并实现 5 个采用 Go、Java、Python、TypeScript 共 4 种语言的微服务，提供 RESTful API 与 WebSocket 实时通信，将区块链风险能力拆分为可独立演进的服务",
+        "在 BFF 中构建服务编排层，支持并行执行与部分失败处理，避免单个下游故障阻断整体请求，使多服务操作延迟降低约 50%",
+        "实现 Lambda 架构，使用 Apache Flink 进行实时 CEP 流处理、Apache Spark 进行批量分析，使实时风险识别与历史数据重算不再相互制约",
+        "部署由 Prometheus、Grafana、Loki 和 Jaeger 组成的可观测性技术栈，实现跨服务分布式追踪，将分散日志排查转为可追踪的故障定位",
+        "基于 Kubernetes 与 Helm Chart 建立部署体系，并构建含安全扫描的 CI/CD 流水线，减少人工部署差异并将安全问题前移至发布前",
+        "集成 HashiCorp Vault 管理密钥，实现 SLO 跟踪与错误预算，并创建自定义负载测试工具，使容量评估和可靠性改进具备量化依据",
+        "设计基于 Kafka 的事件驱动架构，并应用熔断与限流模式，避免下游服务异常引发级联故障，提高系统韧性"
+      ],
+      "keywords": [
+        "Go",
+        "Java",
+        "Python",
+        "TypeScript",
+        "Kubernetes",
+        "Kafka",
+        "Flink",
+        "Spark",
+        "PostgreSQL",
+        "Neo4j",
+        "Redis",
+        "Docker",
+        "Helm",
+        "Prometheus",
+        "Grafana",
+        "Loki"
+      ],
+      "url": "https://github.com/tihaya-anon/chain-risk-platform",
+      "type": "application"
+    }
+  ]
+}

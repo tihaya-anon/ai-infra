@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-infra-lab
+  namespace: ai-infra-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-infra-lab
+  template:
+    metadata:
+      labels:
+        app: ai-infra-lab
+    spec:
+      serviceAccountName: ai-infra-lab
+      containers:
+        - name: ai-infra-lab
+          image: ai-infra-lab:dev
+          imagePullPolicy: IfNotPresent
+          args: ["--component=all"]

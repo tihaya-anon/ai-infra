@@ -1,0 +1,9 @@
+apiVersion: infra.example.io/v1alpha1
+kind: AIJob
+metadata:
+  name: demo-training
+spec:
+  workers: 4
+  gpuPerWorker: 2
+  topology: same-rack
+  image: ai-infra-lab:dev

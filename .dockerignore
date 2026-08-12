@@ -1,0 +1,11 @@
+.git
+.codex
+.agents
+reference
+docs
+deploy
+examples
+scripts
+kind.yaml
+Makefile
+README.md
