@@ -27,6 +27,7 @@ const (
 	rackLabel        = "infra.example.io/rack"
 )
 
+// Scheduler assigns Pods that request the ai-scheduler to simulated GPU nodes.
 type Scheduler struct {
 	kube   kubernetes.Interface
 	pods   corelisters.PodLister
@@ -44,6 +45,7 @@ type nodeState struct {
 	used     int64
 }
 
+// New wires Pod and Node informers to the scheduling queue.
 func New(config *rest.Config, logger *slog.Logger) *Scheduler {
 	client := kubernetes.NewForConfigOrDie(config)
 	factory := informers.NewSharedInformerFactory(client, 30*time.Second)
@@ -62,6 +64,7 @@ func New(config *rest.Config, logger *slog.Logger) *Scheduler {
 	return scheduler
 }
 
+// Run starts informer caches and processes unscheduled AI worker Pods.
 func (s *Scheduler) Run(ctx context.Context) error {
 	defer s.queue.ShutDown()
 	s.start(ctx.Done())
@@ -149,6 +152,7 @@ func (s *Scheduler) schedule(ctx context.Context, key string) error {
 	return nil
 }
 
+// chooseNode filters nodes by capacity, then scores bin packing and rack locality.
 func chooseNode(pod *corev1.Pod, nodes []*corev1.Node, pods []*corev1.Pod) (string, int64, error) {
 	request, err := positiveLabel(pod.Labels, gpuRequestLabel)
 	if err != nil {
@@ -179,6 +183,7 @@ func chooseNode(pod *corev1.Pod, nodes []*corev1.Node, pods []*corev1.Pod) (stri
 	return bestName, bestScore, nil
 }
 
+// buildNodeStates derives simulated GPU occupancy from node and Pod labels.
 func buildNodeStates(nodes []*corev1.Node, pods []*corev1.Pod) map[string]*nodeState {
 	states := make(map[string]*nodeState, len(nodes))
 	for _, node := range nodes {

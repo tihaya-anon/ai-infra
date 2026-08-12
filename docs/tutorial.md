@@ -28,18 +28,21 @@ spec:
 
 系统中的数据流是：
 
-```text
-kubectl apply AIJob
-        |
-        v
-API Server -> AIJob Informer -> Workqueue -> Controller Reconcile
-                                             |
-                                             +-> 创建 4 个未绑定 Worker Pod
-                                                        |
-                                                        v
-API Server -> Pod Informer -> Scheduler Queue -> Filter -> Score -> Bind
-                                                        |
-                                                        +-> kubelet 启动容器
+```mermaid
+flowchart TD
+    CLI[kubectl apply AIJob] --> API[API Server]
+    API --> AIJobInformer[AIJob Informer]
+    AIJobInformer --> ControllerQueue[Controller Workqueue]
+    ControllerQueue --> Reconcile[Controller Reconcile]
+    Reconcile --> Workers[创建 4 个未绑定 Worker Pod]
+    Workers --> API
+    API --> PodInformer[Pod Informer]
+    PodInformer --> SchedulerQueue[Scheduler Workqueue]
+    SchedulerQueue --> Filter[Filter 节点]
+    Filter --> Score[Score 节点]
+    Score --> Bind[Bind Pod 到 Node]
+    Bind --> API
+    API --> Kubelet[kubelet 启动容器]
 ```
 
 Controller 决定“应该存在几个 Worker”，Scheduler 决定“每个 Worker 放到哪台 Node”。二者都只通过 API Server 协作，不直接调用对方。
@@ -68,7 +71,33 @@ make --version
 
 不需要安装 Kubebuilder、Operator SDK、Helm、真实 NVIDIA Driver 或 Device Plugin。
 
-## 三、先看 CRD：给 Kubernetes 增加 AIJob 类型
+## 三、项目结构与阅读顺序
+
+建议沿着一个 AIJob 的生命周期阅读，而不是一开始逐行阅读全部代码：
+
+```mermaid
+flowchart LR
+    Example[1. examples/aijob.yaml] --> CRD[2. deploy/crd.yaml]
+    CRD --> Model[3. internal/aijob/model.go]
+    Model --> Main[4. cmd/ai-infra-lab/main.go]
+    Main --> Controller[5. internal/controller/controller.go]
+    Controller --> Scheduler[6. internal/scheduler/scheduler.go]
+    Scheduler --> Tests[7. internal/scheduler/scheduler_test.go]
+    Tests --> Deploy[8. deploy 与 scripts]
+```
+
+1. `examples/aijob.yaml`：先看用户提交什么，明确输入是 Worker 数量、单 Worker GPU 请求和拓扑偏好。
+2. `deploy/crd.yaml`：再看 API Server 如何校验这些字段，以及 status 子资源如何声明。
+3. `internal/aijob/model.go`：理解 Dynamic Client 返回的非结构化对象如何转换成程序内部的 `Spec`。
+4. `cmd/ai-infra-lab/main.go` 和 `internal/kube/config.go`：看进程如何选择组件，并在集群内外建立 Kubernetes Client。
+5. `internal/controller/controller.go`：按 `New -> Run -> enqueue -> processNext -> reconcile` 阅读，跟踪 AIJob 如何变成 Worker Pod。
+6. `internal/scheduler/scheduler.go`：按 `New -> Run -> enqueue -> schedule -> chooseNode -> Bind` 阅读，跟踪未绑定 Pod 如何选择 Node。
+7. `internal/scheduler/scheduler_test.go`：用三个小场景验证 bin packing、same-rack 和容量不足，比直接进入 kind 调试更容易理解策略。
+8. `deploy/rbac.yaml`、`deploy/deployment.yaml`、`scripts/label-nodes.sh` 和 `Makefile`：最后看组件需要什么权限，以及本地集群如何组装和运行。
+
+第一次阅读先抓住 Controller 与 Scheduler 两条主链即可。`Dockerfile`、`.dockerignore` 和 `kind.yaml` 属于运行环境细节，可以在执行实验时再看。
+
+## 四、先看 CRD：给 Kubernetes 增加 AIJob 类型
 
 `deploy/crd.yaml` 定义 `infra.example.io/v1alpha1` API。最重要的是 schema 与 status 子资源：
 
@@ -86,7 +115,7 @@ API Server 会拒绝 `workers: 0` 等非法输入。开启 status 子资源后�
 
 这里故意使用 Dynamic Client 读取 CRD，因此不用生成 Go 类型、DeepCopy 和 Clientset。代价是字段读取缺少编译期类型检查；生产 Operator 通常会使用代码生成。
 
-## 四、手写 Controller
+## 五、手写 Controller
 
 入口在 `internal/controller/controller.go`。一个 Controller 有四个核心部件：
 
@@ -129,7 +158,7 @@ SchedulerName: "ai-scheduler"
 
 Controller 也监听 Worker Pod 的变化并重新入队所属 AIJob，用于聚合 `pending/running/succeeded/failed` 状态。只有新状态与旧状态不同时才调用 UpdateStatus，避免 status 更新再次触发无意义的 reconcile 循环。
 
-## 五、手写 Scheduler
+## 六、手写 Scheduler
 
 入口在 `internal/scheduler/scheduler.go`。它同样采用 Informer + Workqueue，但只接收：
 
@@ -177,7 +206,7 @@ API Server 完成绑定后，目标 Node 上的 kubelet 才会看到 Pod 并开�
 
 调度器在每次决策时直接向 API Server 查询 Pod 占用量，而不是只读 Informer 缓存。原因是 Bind 后缓存存在短暂延迟；队列中的下一个 Pod 如果读取旧缓存，可能重复使用刚刚分配的容量。生产调度器通常通过 assume/cache 机制解决，这里用直接查询保持实现容易理解。
 
-## 六、运行完整实验
+## 七、运行完整实验
 
 先运行单元测试：
 
@@ -231,7 +260,7 @@ kubectl get pods
 make clean
 ```
 
-## 七、动手改三个实验
+## 八、动手改三个实验
 
 ### 实验 A：制造资源不足
 
@@ -249,7 +278,7 @@ make clean
 
 思考：拓扑收益与可调度性冲突时，应该拒绝任务、降级放置，还是等待资源？
 
-## 八、这个实验刻意没有实现什么
+## 九、这个实验刻意没有实现什么
 
 它用于展示机制，不是生产调度器。生产化至少还需要：
 

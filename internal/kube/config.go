@@ -8,6 +8,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
+// Config uses the in-cluster identity when available and kubeconfig otherwise.
 func Config() (*rest.Config, error) {
 	if config, err := rest.InClusterConfig(); err == nil {
 		return config, nil

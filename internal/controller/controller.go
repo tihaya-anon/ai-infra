@@ -25,6 +25,7 @@ import (
 
 const schedulerName = "ai-scheduler"
 
+// Controller reconciles AIJob resources into their desired worker Pods.
 type Controller struct {
 	kube    kubernetes.Interface
 	dynamic dynamic.Interface
@@ -35,6 +36,7 @@ type Controller struct {
 	logger  *slog.Logger
 }
 
+// New wires AIJob and Pod informers to a shared rate-limited queue.
 func New(config *rest.Config, logger *slog.Logger) *Controller {
 	kubeClient := kubernetes.NewForConfigOrDie(config)
 	dynamicClient := dynamic.NewForConfigOrDie(config)
@@ -76,6 +78,7 @@ func (c *Controller) enqueueOwner(object any) {
 	}
 }
 
+// Run starts informers, waits for cache synchronization, and processes AIJobs.
 func (c *Controller) Run(ctx context.Context, workers int) error {
 	defer c.queue.ShutDown()
 	c.start(ctx.Done())
@@ -146,6 +149,7 @@ func (c *Controller) reconcile(ctx context.Context, key string) error {
 		return err
 	}
 	for index := int64(0); index < spec.Workers; index++ {
+		// Stable names make repeated reconciliation idempotent.
 		podName := fmt.Sprintf("%s-worker-%d", name, index)
 		if podExists(pods.Items, podName) {
 			continue
@@ -197,6 +201,7 @@ func (c *Controller) updateStatus(ctx context.Context, job *unstructured.Unstruc
 		}
 	}
 	status := map[string]any{"pending": pending, "running": running, "succeeded": succeeded, "failed": failed}
+	// Avoid a status write that would immediately enqueue the same AIJob again.
 	if reflect.DeepEqual(job.Object["status"], status) {
 		return nil
 	}
