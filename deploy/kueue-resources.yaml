@@ -1,0 +1,46 @@
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: Topology
+metadata:
+  name: gpu-topology
+spec:
+  levels:
+    - nodeLabel: infra.example.io/rack
+    - nodeLabel: kubernetes.io/hostname
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ResourceFlavor
+metadata:
+  name: gpu-topology
+spec:
+  nodeLabels:
+    infra.example.io/gpu-node: "true"
+  topologyName: gpu-topology
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ClusterQueue
+metadata:
+  name: training
+spec:
+  namespaceSelector: {}
+  resourceGroups:
+    - coveredResources:
+        - cpu
+        - memory
+        - example.com/gpu
+      flavors:
+        - name: gpu-topology
+          resources:
+            - name: cpu
+              nominalQuota: "100"
+            - name: memory
+              nominalQuota: 100Gi
+            - name: example.com/gpu
+              nominalQuota: "12"
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: LocalQueue
+metadata:
+  name: training
+  namespace: default
+spec:
+  clusterQueue: training

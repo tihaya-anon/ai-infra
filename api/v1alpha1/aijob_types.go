@@ -1,7 +1,6 @@
 package v1alpha1
 
 import (
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -15,12 +14,10 @@ type AIJobSpec struct {
 	Image        string `json:"image,omitempty"`
 }
 
-// AIJobStatus summarizes the current worker Pod phases.
+// AIJobStatus summarizes the JobSet observed by the controller.
 type AIJobStatus struct {
-	Pending   int32 `json:"pending,omitempty"`
-	Running   int32 `json:"running,omitempty"`
-	Succeeded int32 `json:"succeeded,omitempty"`
-	Failed    int32 `json:"failed,omitempty"`
+	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
+	Conditions         []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // AIJob is the declarative API consumed by the training-job controller.
@@ -42,6 +39,10 @@ type AIJobList struct {
 func (in *AIJob) DeepCopyInto(out *AIJob) {
 	*out = *in
 	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	if in.Status.Conditions != nil {
+		out.Status.Conditions = make([]metav1.Condition, len(in.Status.Conditions))
+		copy(out.Status.Conditions, in.Status.Conditions)
+	}
 }
 
 func (in *AIJob) DeepCopy() *AIJob {
@@ -76,21 +77,3 @@ func (in *AIJobList) DeepCopy() *AIJobList {
 }
 
 func (in *AIJobList) DeepCopyObject() runtime.Object { return in.DeepCopy() }
-
-// WorkerStatus reduces Pod phases to the API status exposed to users.
-func WorkerStatus(pods []corev1.Pod) AIJobStatus {
-	status := AIJobStatus{}
-	for _, pod := range pods {
-		switch pod.Status.Phase {
-		case corev1.PodRunning:
-			status.Running++
-		case corev1.PodSucceeded:
-			status.Succeeded++
-		case corev1.PodFailed:
-			status.Failed++
-		default:
-			status.Pending++
-		}
-	}
-	return status
-}

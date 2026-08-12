@@ -14,9 +14,9 @@ kind: ClusterRole
 metadata:
   name: aijob-controller
 rules:
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["jobset.x-k8s.io"]
+    resources: ["jobsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
   - apiGroups: ["infra.example.io"]
     resources: ["aijobs"]
     verbs: ["get", "list", "watch"]

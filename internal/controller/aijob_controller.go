@@ -2,120 +2,176 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 
 	aiv1alpha1 "github.com/tihaya-anon/ai-infra-lab/api/v1alpha1"
 	"github.com/tihaya-anon/ai-infra-lab/internal/topology"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	jobsetv1alpha2 "sigs.k8s.io/jobset/api/jobset/v1alpha2"
 )
 
 const SchedulerName = "ai-scheduler"
 
 var _ reconcile.Reconciler = &AIJobReconciler{}
 
-// AIJobReconciler turns an AIJob into worker Pods.
+// AIJobReconciler adapts the AIJob API to the standard JobSet API.
 type AIJobReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-// Reconcile makes the observed worker Pods match AIJob.spec.
+// Reconcile converges one AIJob-owned JobSet and derives the public status.
 func (r *AIJobReconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.Result, error) {
 	job := &aiv1alpha1.AIJob{}
 	if err := r.Get(ctx, request.NamespacedName, job); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	pods := &corev1.PodList{}
-	if err := r.List(ctx, pods, client.InNamespace(job.Namespace), client.MatchingLabels{topology.JobLabel: job.Name}); err != nil {
+	jobSet, err := r.reconcileJobSet(ctx, job)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
-	expectedNames := make(map[string]struct{}, job.Spec.Workers)
-	for index := int32(0); index < job.Spec.Workers; index++ {
-		name := fmt.Sprintf("%s-worker-%d", job.Name, index)
-		expectedNames[name] = struct{}{}
-		if containsPod(pods.Items, name) {
-			continue
-		}
-		pod := workerPod(job, name)
-		if err := ctrl.SetControllerReference(job, pod, r.Scheme); err != nil {
-			return ctrl.Result{}, err
-		}
-		if err := r.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
-			return ctrl.Result{}, err
-		}
-	}
-	for index := range pods.Items {
-		pod := &pods.Items[index]
-		if _, expected := expectedNames[pod.Name]; expected || !metav1.IsControlledBy(pod, job) {
-			continue
-		}
-		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, err
-		}
-	}
-
-	status := aiv1alpha1.WorkerStatus(pods.Items)
-	if reflect.DeepEqual(job.Status, status) {
-		return ctrl.Result{}, nil
-	}
-	job.Status = status
-	return ctrl.Result{}, r.Status().Update(ctx, job)
+	return ctrl.Result{}, r.reconcileStatus(ctx, job, jobSet)
 }
 
-// SetupWithManager declares that Pod changes must reconcile their owning AIJob.
+func (r *AIJobReconciler) reconcileJobSet(ctx context.Context, job *aiv1alpha1.AIJob) (*jobsetv1alpha2.JobSet, error) {
+	desired := desiredJobSet(job)
+	jobSet := &jobsetv1alpha2.JobSet{ObjectMeta: metav1.ObjectMeta{Name: desired.Name, Namespace: desired.Namespace}}
+
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, jobSet, func() error {
+		if err := ctrl.SetControllerReference(job, jobSet, r.Scheme); err != nil {
+			return err
+		}
+		reconcileLabels(jobSet, desired)
+		jobSet.Spec.ReplicatedJobs = desired.Spec.ReplicatedJobs
+		jobSet.Spec.Network = desired.Spec.Network
+		// Kueue owns spec.suspend after admission; do not overwrite it here.
+		return nil
+	})
+	return jobSet, err
+}
+
+func (r *AIJobReconciler) reconcileStatus(ctx context.Context, job *aiv1alpha1.AIJob, jobSet *jobsetv1alpha2.JobSet) error {
+	status := statusFromJobSet(job.Generation, jobSet)
+	if reflect.DeepEqual(job.Status, status) {
+		return nil
+	}
+	job.Status = status
+	return r.Status().Update(ctx, job)
+}
+
+// SetupWithManager maps owned JobSet changes back to their AIJob.
 func (r *AIJobReconciler) SetupWithManager(manager ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(manager).
 		For(&aiv1alpha1.AIJob{}).
-		Owns(&corev1.Pod{}).
+		Owns(&jobsetv1alpha2.JobSet{}).
 		Complete(r)
 }
 
-func workerPod(job *aiv1alpha1.AIJob, name string) *corev1.Pod {
-	image := job.Spec.Image
-	if image == "" {
-		image = "ai-infra-lab:dev"
+func desiredJobSet(job *aiv1alpha1.AIJob) *jobsetv1alpha2.JobSet {
+	labels := map[string]string{topology.JobLabel: job.Name}
+	if queue := job.Labels[topology.QueueLabel]; queue != "" {
+		labels[topology.QueueLabel] = queue
 	}
-	gpus := *resource.NewQuantity(job.Spec.GPUPerWorker, resource.DecimalSI)
-	gpuResource := corev1.ResourceName(job.Spec.GPUResource)
-	if gpuResource == "" {
-		gpuResource = topology.GPUResource
-	}
-	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name, Namespace: job.Namespace,
-			Labels:      map[string]string{topology.JobLabel: job.Name},
-			Annotations: map[string]string{topology.PreferenceAnnotation: job.Spec.Topology},
-		},
-		Spec: corev1.PodSpec{
-			SchedulerName: SchedulerName, RestartPolicy: corev1.RestartPolicyNever,
-			Containers: []corev1.Container{{
-				Name: "worker", Image: image, ImagePullPolicy: corev1.PullIfNotPresent,
-				Command:   []string{"/worker"},
-				Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{gpuResource: gpus}},
+
+	return &jobsetv1alpha2.JobSet{
+		ObjectMeta: metav1.ObjectMeta{Name: job.Name, Namespace: job.Namespace, Labels: labels},
+		Spec: jobsetv1alpha2.JobSetSpec{
+			Network: &jobsetv1alpha2.Network{EnableDNSHostnames: boolPtr(true)},
+			ReplicatedJobs: []jobsetv1alpha2.ReplicatedJob{{
+				Name:     "workers",
+				Replicas: 1,
+				Template: batchv1.JobTemplateSpec{Spec: workerJobSpec(job)},
 			}},
 		},
 	}
 }
 
-func containsPod(pods []corev1.Pod, name string) bool {
-	return findPod(pods, name) != nil
+func reconcileLabels(actual, desired *jobsetv1alpha2.JobSet) {
+	if actual.Labels == nil {
+		actual.Labels = make(map[string]string, 2)
+	}
+	actual.Labels[topology.JobLabel] = desired.Labels[topology.JobLabel]
+	if queue := desired.Labels[topology.QueueLabel]; queue != "" {
+		actual.Labels[topology.QueueLabel] = queue
+	} else {
+		delete(actual.Labels, topology.QueueLabel)
+	}
 }
 
-func findPod(pods []corev1.Pod, name string) *corev1.Pod {
-	for index := range pods {
-		pod := &pods[index]
-		if pod.Name == name {
-			return pod
-		}
+func workerJobSpec(job *aiv1alpha1.AIJob) batchv1.JobSpec {
+	workers := job.Spec.Workers
+	backoffLimit := int32(0)
+	return batchv1.JobSpec{
+		Parallelism:    &workers,
+		Completions:    &workers,
+		CompletionMode: ptr(batchv1.IndexedCompletion),
+		BackoffLimit:   &backoffLimit,
+		Template: corev1.PodTemplateSpec{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels:      map[string]string{topology.JobLabel: job.Name},
+				Annotations: schedulingAnnotations(job.Spec.Topology),
+			},
+			Spec: corev1.PodSpec{
+				SchedulerName: SchedulerName,
+				RestartPolicy: corev1.RestartPolicyNever,
+				Containers:    []corev1.Container{workerContainer(job)},
+			},
+		},
+	}
+}
+
+func workerContainer(job *aiv1alpha1.AIJob) corev1.Container {
+	image := job.Spec.Image
+	if image == "" {
+		image = "ai-infra-lab:dev"
+	}
+	gpuResource := corev1.ResourceName(job.Spec.GPUResource)
+	if gpuResource == "" {
+		gpuResource = topology.GPUResource
+	}
+	gpus := *resource.NewQuantity(job.Spec.GPUPerWorker, resource.DecimalSI)
+	resources := corev1.ResourceList{gpuResource: gpus}
+	return corev1.Container{
+		Name:            "worker",
+		Image:           image,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Command:         []string{"/worker"},
+		Resources:       corev1.ResourceRequirements{Requests: resources, Limits: resources},
+	}
+}
+
+func schedulingAnnotations(preference string) map[string]string {
+	if preference == "same-rack" {
+		return map[string]string{topology.RequiredTopologyAnnotation: topology.RackLabel}
+	}
+	if preference == topology.FabricNVLink || preference == topology.FabricPCIe {
+		return map[string]string{topology.PreferenceAnnotation: preference}
 	}
 	return nil
 }
+
+func statusFromJobSet(generation int64, jobSet *jobsetv1alpha2.JobSet) aiv1alpha1.AIJobStatus {
+	status := aiv1alpha1.AIJobStatus{ObservedGeneration: generation}
+	if len(jobSet.Status.Conditions) == 0 {
+		return status
+	}
+	status.Conditions = make([]metav1.Condition, len(jobSet.Status.Conditions))
+	copy(status.Conditions, jobSet.Status.Conditions)
+	for index := range status.Conditions {
+		status.Conditions[index].ObservedGeneration = generation
+	}
+	return status
+}
+
+func boolPtr(value bool) *bool { return &value }
+
+func ptr[T any](value T) *T { return &value }

@@ -3,12 +3,14 @@ package topology
 import corev1 "k8s.io/api/core/v1"
 
 const (
-	JobLabel             = "infra.example.io/aijob"
-	PreferenceAnnotation = "infra.example.io/gpu-topology"
-	FabricLabel          = "infra.example.io/gpu-fabric"
-	RackLabel            = "infra.example.io/rack"
-	FabricNVLink         = "nvlink"
-	FabricPCIe           = "pcie"
+	JobLabel                   = "infra.example.io/aijob"
+	QueueLabel                 = "kueue.x-k8s.io/queue-name"
+	PreferenceAnnotation       = "infra.example.io/gpu-topology"
+	RequiredTopologyAnnotation = "kueue.x-k8s.io/podset-required-topology"
+	FabricLabel                = "infra.example.io/gpu-fabric"
+	RackLabel                  = "infra.example.io/rack"
+	FabricNVLink               = "nvlink"
+	FabricPCIe                 = "pcie"
 )
 
 // GPUResource is simulated by the kind lab. Production AIJobs should select

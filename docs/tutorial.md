@@ -4,8 +4,6 @@
 
 项目仍保留一个 Scheduler Framework 插件，用来展示标准调度器无法表达的集群级节点偏好。它不是 Job Controller，也不能替代设备驱动。
 
-> 本文先描述目标架构。仓库将分两个提交迁移：文档提交完成后，代码再从“Controller 直接管理 Pod”改为“Controller 管理 JobSet”。
-
 ## 一、业务方如何使用
 
 平台组件安装完成后，训练业务只提交声明式 YAML：
@@ -68,7 +66,7 @@ Controller 只负责 AI 领域 API 的适配：
 
 1. 读取 `AIJob.spec`；
 2. 生成或更新一个由它拥有的 `JobSet`；
-3. 把 JobSet 的 Condition 和计数汇总到 `AIJob.status`。
+3. 把 JobSet 的 Conditions 投影到 `AIJob.status`。
 
 它不再逐个创建、删除和统计 Worker Pod。
 
@@ -174,7 +172,7 @@ metadata:
 
 ## 五、项目阅读顺序
 
-代码迁移完成后，建议按业务声明到基础设施的方向阅读：
+建议按业务声明到基础设施的方向阅读：
 
 ```mermaid
 flowchart TD
@@ -198,7 +196,7 @@ flowchart TD
 
 1. `examples/aijob.yaml`：业务方声明的训练需求。
 2. `deploy/crd.yaml`：API Server 如何注册和校验 AIJob。
-3. `api/v1alpha1`：`AIJobSpec`、Condition 和 Scheme 注册。
+3. `api/v1alpha1`：`AIJobSpec`、Conditions 和 Scheme 注册。
 4. `internal/controller/aijob_controller.go`：AIJob 如何被翻译成 JobSet。
 5. JobSet/Kueue manifest：通用任务生命周期、队列与拓扑如何接管。
 6. `internal/plugin/gputopology/plugin.go`：仍需自定义时，如何实现节点打分扩展点。
@@ -254,7 +252,6 @@ ctrl.SetControllerReference(aiJob, jobSet, r.Scheme)
 插件通过编译期断言实现 Framework 接口：
 
 ```go
-var _ framework.PreScorePlugin = &Plugin{}
 var _ framework.ScorePlugin = &Plugin{}
 ```
 
@@ -301,7 +298,7 @@ profiles:
 
 ## 八、安装和运行
 
-本地实验需要 Go 1.22+、Docker、kubectl、kind、make 和 Bash，不需要真实 GPU。代码迁移后，部署还会自动安装与 Kubernetes 版本匹配的 JobSet 和 Kueue。
+本地实验固定使用 Kubernetes 1.34.8、Go 1.24、JobSet 0.10.1 和 Kueue 0.14.3，还需要 Docker、kubectl、kind、make 和 Bash，不需要真实 GPU。Go 依赖使用 Kubernetes 1.34.1，和集群保持相同 minor；`make deploy` 会安装固定版本的 JobSet 和 Kueue。
 
 ```bash
 make test
