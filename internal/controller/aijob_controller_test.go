@@ -46,20 +46,43 @@ func TestSameRackUsesKueueTopology(t *testing.T) {
 	}
 }
 
-func TestReconcileLabelsPreservesOtherControllersFields(t *testing.T) {
+func TestReconcileOwnedFieldsPreservesOtherControllersFields(t *testing.T) {
 	actual := &jobsetv1alpha2.JobSet{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
 		"jobset.x-k8s.io/internal": "keep",
 		topology.QueueLabel:        "old-queue",
 	}}}
 	desired := desiredJobSet(testAIJob("any"))
 
-	reconcileLabels(actual, desired)
+	reconcileOwnedFields(actual, desired)
 
 	if got := actual.Labels["jobset.x-k8s.io/internal"]; got != "keep" {
 		t.Fatalf("got external label %q, want keep", got)
 	}
 	if _, exists := actual.Labels[topology.QueueLabel]; exists {
 		t.Fatal("queue label should be removed when AIJob no longer selects a queue")
+	}
+}
+
+func TestReconcileOwnedFieldsDoesNotOverwriteDefaultedSpec(t *testing.T) {
+	created := metav1.Now()
+	actual := &jobsetv1alpha2.JobSet{
+		ObjectMeta: metav1.ObjectMeta{CreationTimestamp: created},
+		Spec: jobsetv1alpha2.JobSetSpec{
+			Network: &jobsetv1alpha2.Network{
+				EnableDNSHostnames:       boolPtr(true),
+				PublishNotReadyAddresses: boolPtr(true),
+			},
+		},
+	}
+	desired := desiredJobSet(testAIJob("nvlink"))
+
+	reconcileOwnedFields(actual, desired)
+
+	if actual.Spec.Network.PublishNotReadyAddresses == nil || !*actual.Spec.Network.PublishNotReadyAddresses {
+		t.Fatal("webhook-defaulted network fields must be preserved after creation")
+	}
+	if actual.Spec.ReplicatedJobs != nil {
+		t.Fatal("existing spec must not be replaced during reconciliation")
 	}
 }
 

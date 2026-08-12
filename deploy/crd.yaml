@@ -32,6 +32,9 @@ spec:
           properties:
             spec:
               type: object
+              x-kubernetes-validations:
+                - rule: self == oldSelf
+                  message: AIJob spec is immutable; recreate the AIJob to change the workload
               required: [workers, gpuPerWorker]
               properties:
                 workers:

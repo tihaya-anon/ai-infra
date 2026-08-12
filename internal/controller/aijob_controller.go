@@ -51,9 +51,7 @@ func (r *AIJobReconciler) reconcileJobSet(ctx context.Context, job *aiv1alpha1.A
 		if err := ctrl.SetControllerReference(job, jobSet, r.Scheme); err != nil {
 			return err
 		}
-		reconcileLabels(jobSet, desired)
-		jobSet.Spec.ReplicatedJobs = desired.Spec.ReplicatedJobs
-		jobSet.Spec.Network = desired.Spec.Network
+		reconcileOwnedFields(jobSet, desired)
 		// Kueue owns spec.suspend after admission; do not overwrite it here.
 		return nil
 	})
@@ -96,9 +94,9 @@ func desiredJobSet(job *aiv1alpha1.AIJob) *jobsetv1alpha2.JobSet {
 	}
 }
 
-// reconcileLabels changes only labels owned by this controller. Kueue and other
-// reconcilers may add fields to the same JobSet independently.
-func reconcileLabels(actual, desired *jobsetv1alpha2.JobSet) {
+// reconcileOwnedFields initializes immutable spec fields only when creating the
+// JobSet. Webhooks and Kueue may default or inject fields into that spec later.
+func reconcileOwnedFields(actual, desired *jobsetv1alpha2.JobSet) {
 	if actual.Labels == nil {
 		actual.Labels = make(map[string]string, 2)
 	}
@@ -107,6 +105,11 @@ func reconcileLabels(actual, desired *jobsetv1alpha2.JobSet) {
 		actual.Labels[topology.QueueLabel] = queue
 	} else {
 		delete(actual.Labels, topology.QueueLabel)
+	}
+
+	if actual.CreationTimestamp.IsZero() {
+		actual.Spec.ReplicatedJobs = desired.Spec.ReplicatedJobs
+		actual.Spec.Network = desired.Spec.Network
 	}
 }
 

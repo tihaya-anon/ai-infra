@@ -142,7 +142,254 @@ status:
 
 `observedGeneration` 用来区分 Condition 描述的是当前 spec，还是用户修改前的旧 spec。
 
-## 四、拓扑需求应定义在哪里
+## 四、先理解 GPU 为什么需要互连
+
+### 先建立物理层级：Rack、Node、Socket 与 NUMA
+
+这些词描述的不是同一层。先从数据中心向服务器内部逐层展开：
+
+```mermaid
+flowchart TD
+    Cluster[Kubernetes Cluster 集群]
+    RackA[Rack A 机架]
+    RackB[Rack B 机架]
+    Node1[Node 1 服务器]
+    Node2[Node 2 服务器]
+    Socket0[CPU Socket 0]
+    Socket1[CPU Socket 1]
+    NUMA0[NUMA Node 0]
+    NUMA1[NUMA Node 1]
+    Memory0[本地内存]
+    Memory1[本地内存]
+    GPU01[GPU 与网卡]
+    GPU23[GPU 与网卡]
+
+    Cluster --> RackA
+    Cluster --> RackB
+    RackA --> Node1
+    RackA --> Node2
+    Node1 --> Socket0
+    Node1 --> Socket1
+    Socket0 --> NUMA0
+    Socket1 --> NUMA1
+    NUMA0 --> Memory0
+    NUMA0 --> GPU01
+    NUMA1 --> Memory1
+    NUMA1 --> GPU23
+```
+
+各层可以这样理解：
+
+| 名称 | 是什么 | 本项目如何表示 |
+| --- | --- | --- |
+| Cluster | 由 Kubernetes 管理的一组服务器 | 整个 kind 集群 |
+| Rack | 数据中心里安装多台服务器、交换机和供电设备的物理机柜 | Node 标签 `infra.example.io/rack` |
+| Node | Kubernetes 注册的一台工作机器，可以是物理机或虚拟机 | `kubectl get nodes` 中的一行 |
+| CPU Socket | 主板上的一个 CPU 封装；双路服务器有两个 Socket | 本实验没有模拟 |
+| NUMA Node | 一组 CPU 核、离它们较近的内存及 PCIe 设备构成的局部域 | 本实验没有模拟 |
+| GPU | 连接在某个 PCIe/NVLink 拓扑中的具体加速设备 | 只用 `example.com/gpu` 模拟数量 |
+
+这里有一个容易踩坑的命名冲突：
+
+- **Kubernetes Node** 是一整台可调度机器；
+- **NUMA Node** 是一台机器内部的硬件局部域。
+
+它们都叫 Node，但尺度完全不同。一台 Kubernetes Node 内可以包含多个 NUMA Node。
+
+### 什么是 NUMA
+
+NUMA 是 Non-Uniform Memory Access，即“非一致内存访问”。在多路服务器中，每颗 CPU 通常有自己直接连接的本地内存和 PCIe 设备：
+
+```mermaid
+flowchart TD
+    App[训练进程]
+    CPU0[CPU Socket 0]
+    Local0[本地内存 0]
+    GPU0[本地 GPU 0]
+    Interconnect[CPU Socket 互连]
+    CPU1[CPU Socket 1]
+    Local1[本地内存 1]
+    GPU1[本地 GPU 1]
+
+    App --> CPU0
+    CPU0 --> Local0
+    CPU0 --> GPU0
+    CPU0 --> Interconnect
+    Interconnect --> CPU1
+    CPU1 --> Local1
+    CPU1 --> GPU1
+```
+
+CPU0 访问自己的内存 0 或本地 GPU 0，路径通常更短；访问 CPU1 一侧的内存 1 或 GPU 1，需要经过 Socket 间互连。所谓“非一致”就是访问不同位置的延迟和带宽不相同，并不是内存内容不一致。
+
+这会影响 AI 工作负载：即使 Pod 已经落到正确服务器，如果训练进程运行在 NUMA 0 的 CPU 核上，却频繁使用 NUMA 1 下的 GPU 或网卡，数据路径仍可能绕远。生产环境会结合 CPU Manager、Topology Manager、设备驱动或 DRA 做 CPU、内存、GPU 和网卡的对齐。本实验只演示 Node 级调度，不提供 NUMA 级保证。
+
+### Rack 为什么影响调度
+
+同一 Rack 中的服务器通常接入相同的机架顶部交换机（Top-of-Rack Switch，ToR）。跨 Rack 通信还要经过更上层的交换网络，因此可能有更长路径、更多竞争和不同故障域。
+
+把 Worker 放在同一 Rack 的好处可能是通信路径较近；代价是它们也更容易同时受到同一机架交换机、供电或散热故障影响。因此：
+
+- 通信密集型训练可能偏好或要求 `same-rack`；
+- 高可用服务反而可能要求副本分散到不同 Rack；
+- 拓扑策略不是固定的“越近越好”，而是性能与容错目标之间的选择。
+
+本项目用 Kueue TAS 处理 `same-rack`，因为它需要在创建 Pod 前为整个 Worker 集合判断同一 Rack 是否有足够配额。普通 Scheduler Plugin 每次只给一个 Pod 的 Node 打分，无法可靠完成整组准入。
+
+### 多张 GPU 为什么要通信
+
+一张 GPU 有自己的计算单元和显存。模型或一个训练批次放不进单张 GPU 时，训练框架会把工作拆到多张 GPU：
+
+- 数据并行：每张 GPU 处理不同数据，随后交换并聚合梯度；
+- 张量并行：一个算子被切到多张 GPU，计算过程中频繁交换中间结果；
+- 流水线并行：模型的不同层位于不同 GPU，前后阶段传递激活值和梯度。
+
+拆分使更多 GPU 能共同工作，但也引入了通信。如果 GPU 很快、通信路径很慢，计算单元就会等待数据，增加 GPU 数量反而不一定按比例增加吞吐。因此调度不仅关心“有几张 GPU”，还关心“这些 GPU 之间怎么连接”。
+
+NCCL 是训练框架常用的 NVIDIA 集合通信库。以 AllReduce 为例，每个 Worker 计算出局部梯度后，NCCL 沿可用的 NVLink、PCIe 或网络路径完成聚合。Kubernetes 不执行这些通信，但它决定 Pod 落在哪里，因此会间接决定 NCCL 能使用什么路径。
+
+### PCIe：通用设备总线
+
+PCI Express（PCIe）是服务器中连接 CPU、GPU、网卡和 NVMe 等设备的通用总线。可以先把它理解为设备进入主机系统的基础通道。
+
+```mermaid
+flowchart TD
+    CPU[CPU 与内存]
+    Root[PCIe Root Complex]
+    Switch[PCIe Switch]
+    GPU0[GPU 0]
+    GPU1[GPU 1]
+    NIC[高速网卡]
+
+    CPU --> Root
+    Root --> Switch
+    Switch --> GPU0
+    Switch --> GPU1
+    Root --> NIC
+```
+
+PCIe 的几个关键概念：
+
+- **代际和通道数**：例如 Gen4 x16，代际与 lane 数共同影响理论带宽；
+- **Root Complex**：CPU/内存系统进入 PCIe 树的根；
+- **PCIe Switch**：扩展出多个下游端口，让多张 GPU 共享或直接经过同一个交换层；
+- **NUMA**：双路服务器中，每个 CPU 有本地内存和本地 PCIe 设备。访问另一颗 CPU 下的设备通常需要跨 socket。
+
+“GPU 在同一台机器”并不代表路径相同。两张 GPU 可能位于同一 PCIe Switch 下，也可能分属不同 Root Complex，后者的通信路径通常更长，还可能与 CPU 内存或网卡流量竞争带宽。
+
+### NVLink 与 NVSwitch：GPU 专用高速互连
+
+NVLink 是 NVIDIA 的 GPU 高速互连技术。与通用 PCIe 相比，它面向 GPU 间高带宽通信；具体带宽、链路数量和支持方式取决于 GPU 与服务器代际，所以工程上应读取真实拓扑，不能只凭型号名称假设。
+
+两张 GPU 之间存在 NVLink，不代表机器中的每张 GPU 都两两直连。真实服务器可能是局部直连、环形或其他拓扑。NVSwitch 则提供交换结构，把多张 GPU 组织成更大的高速互连域：
+
+```mermaid
+flowchart TD
+    GPU0[GPU 0]
+    GPU1[GPU 1]
+    GPU2[GPU 2]
+    GPU3[GPU 3]
+    NVSwitch[NVSwitch Fabric]
+    PCIe[PCIe 与 CPU 控制路径]
+
+    GPU0 --> NVSwitch
+    GPU1 --> NVSwitch
+    GPU2 --> NVSwitch
+    GPU3 --> NVSwitch
+    NVSwitch --> PCIe
+```
+
+NVLink 并没有让 PCIe 消失。GPU 仍可能通过 PCIe 完成设备发现、控制、CPU-GPU 数据传输或连接其他设备。更准确的理解是：一台服务器内可以同时存在 PCIe 拓扑和 NVLink/NVSwitch 拓扑，通信库根据数据两端和硬件能力选择路径。
+
+### 如何读 `nvidia-smi topo -m`
+
+在真实 NVIDIA GPU 节点上，下面的命令会展示 GPU、CPU 和网卡之间的拓扑：
+
+```bash
+nvidia-smi topo -m
+```
+
+简化输出可能类似：
+
+```text
+        GPU0  GPU1  GPU2  NIC0  CPU Affinity
+GPU0     X    NV4   PHB   PIX   0-31
+GPU1    NV4    X    PHB   PIX   0-31
+GPU2    PHB   PHB    X    SYS   32-63
+NIC0    PIX   PIX   SYS    X
+```
+
+常见标记不是性能分数，而是路径类型：
+
+| 标记 | 简化含义 |
+| --- | --- |
+| `X` | 同一个设备 |
+| `NV#` | 经过若干条聚合的 NVLink，例如 `NV4` |
+| `PIX` | 最多经过一个 PCIe bridge，通常路径较近 |
+| `PXB` | 经过多个 PCIe bridge，但不经过 CPU 的 PCIe Host Bridge |
+| `PHB` | 经过 PCIe Host Bridge，通常到达 CPU Root Complex |
+| `NODE` | 还经过同一 NUMA 节点内的 Host Bridge 互连 |
+| `SYS` | 还经过 NUMA 节点之间的 CPU 互连，通常路径更远 |
+
+按这个示例，GPU0 与 GPU1 有直接 NVLink 路径；GPU0 与 NIC0 共享较近的 PCIe 路径；GPU2 靠近另一组 CPU 核，访问 NIC0 要跨 NUMA。一个通信密集任务若拿到 GPU0 和 GPU1，通常比拿到 GPU0 和 GPU2 更理想。
+
+拓扑矩阵仍只是结构信息，不是性能测试。链路是否启用、P2P 是否可用、容器是否正确暴露 `/sys`、BIOS/IOMMU 设置和并发流量都会影响结果。可以继续使用：
+
+```bash
+nvidia-smi topo -p2p p  # 检查 GPU 间 PCIe P2P 能力
+nvidia-smi topo -p2p n  # 检查 GPU 间 NVLink P2P 能力
+```
+
+再用 `nccl-tests` 或 `nvbandwidth` 测量实际带宽。工程上应以“发现拓扑 + 验证能力 + 性能测试”形成标签和调度策略，而不是只抓取一个型号字段。
+
+### 跨服务器：网卡、RDMA 与机架
+
+传统服务器中的 NVLink 和 PCIe 首先描述单机内设备路径。Worker 分布在不同服务器时，数据通常要经过 GPU、PCIe、网卡和交换网络。RDMA 允许数据绕过较多 CPU 软件栈开销；GPUDirect RDMA 进一步支持网卡与 GPU 显存之间的高效数据传输。InfiniBand 和 RoCE 是 AI 集群常见的 RDMA 网络方案。
+
+新一代 NVLink Switch 系统也可以把 NVLink fabric 扩展到多个计算节点甚至机架级域。这是特定整机与交换架构提供的能力，不能因为 GPU 支持 NVLink 就假设普通集群天然具备跨机 NVLink。
+
+`same-rack` 表示多个 Worker 尽量或必须位于同一机架拓扑域。它可以减少跨汇聚层通信并利用机架内网络，但仍不自动保证：
+
+- 节点装有 RDMA 网卡；
+- 网卡与 GPU 位于合适的 NUMA/PCIe 路径；
+- 网络没有拥塞或超售；
+- Worker 获得了同一个 NVLink 域中的 GPU。
+
+因此，`same-rack`、`nvlink` 和 `pcie` 不是同一层的三个互斥硬件型号。前者描述跨节点位置，后两者在本项目中描述节点内 GPU fabric 偏好。
+
+### 从近到远看一次通信
+
+下面是教学用的简化路径。真实机器的相对性能由硬件代际、链路宽度、NUMA、通信大小和并发流量共同决定，不能把它当成固定性能公式。
+
+```mermaid
+flowchart TD
+    SameGPU[同一 GPU 显存]
+    NVLink[同一 NVLink 或 NVSwitch 域]
+    PCIeSwitch[同一 PCIe Switch]
+    CrossRoot[跨 PCIe Root 或 CPU Socket]
+    Rack[同机架 RDMA 网络]
+    CrossRack[跨机架网络]
+
+    SameGPU --> NVLink
+    NVLink --> PCIeSwitch
+    PCIeSwitch --> CrossRoot
+    CrossRoot --> Rack
+    Rack --> CrossRack
+```
+
+排查真实 GPU 服务器时，常用 `nvidia-smi topo -m` 查看 GPU、CPU 和网卡的连接矩阵，再用 NCCL 测试验证实际带宽与延迟。调度系统使用的标签或 DRA 属性，应来自这类硬件发现结果，而不是人工猜测。
+
+### 这些概念如何映射到本项目
+
+| `AIJob.spec.topology` | 当前代码如何处理 | 能保证什么 | 不能保证什么 |
+| --- | --- | --- | --- |
+| `nvlink` | 给 Pod 加偏好注解，Scheduler Plugin 给 `gpu-fabric=nvlink` 的 Node 更高分 | 在其他条件相同时更偏向标为 NVLink 的 Node | 不是硬约束；不选择具体 GPU；不证明 GPU 两两 NVLink 相连 |
+| `pcie` | 给 Pod 加偏好注解，对 NVLink Node 打 100 分、PCIe Node 打 80 分 | 允许使用高速 Node，同时偏好至少有 PCIe GPU 能力的 Node | 不保证 GPU 位于同一 PCIe Switch 或 NUMA 节点 |
+| `same-rack` | 转换为 Kueue TAS 的 required topology 注解 | 整个 PodSet 准入到同一 rack 拓扑域 | 不保证节点内 GPU 路径，也不保证 RDMA 网络质量 |
+
+这里 `pcie` 的含义不是“拒绝 NVLink”。NVLink 机器仍然拥有 PCIe，并且通常是更好的节点，因此当前评分让 NVLink Node 得 100 分、普通 PCIe Node 得 80 分。如果业务需要“必须位于某类设备拓扑”，就不应只用 `ScorePlugin`，而应使用 Filter、node affinity，或更适合设备级约束的 DRA。
+
+## 五、拓扑需求应定义在哪里
 
 “拓扑”至少包含三个层次，不能只用一个 Node Label 解决。
 
@@ -170,7 +417,7 @@ metadata:
 
 本实验没有真实 GPU，所以只能用 Node Label 模拟节点级 `nvlink` 和 `pcie` 偏好。这是教学替身，不是生产设备分配方案。
 
-## 五、项目阅读顺序
+## 六、项目阅读顺序
 
 建议按业务声明到基础设施的方向阅读：
 
@@ -203,7 +450,7 @@ flowchart TD
 7. `cmd/scheduler/main.go` 与 `deploy/scheduler-config.yaml`：插件如何注册和启用。
 8. `deploy/`、`scripts/` 与 `Makefile`：最后看安装、权限和本地实验。
 
-## 六、AIJob Controller 的目标形态
+## 七、AIJob Controller 的目标形态
 
 入口声明它管理 AIJob，并监听自己创建的 JobSet：
 
@@ -247,7 +494,18 @@ ctrl.SetControllerReference(aiJob, jobSet, r.Scheme)
 
 删除 AIJob 后，Kubernetes Garbage Collector 会回收 JobSet；JobSet Controller 再清理其拥有的 Job 和 Pod。
 
-## 七、Scheduler Plugin 的合理边界
+JobSet 的 `network`、ReplicatedJob 模板等关键字段是不可变的，而且 JobSet 与 Kueue 的 webhook 会在创建时补充默认值、NodeSelector、SchedulingGate 和内部注解。因此 Controller 只在首次创建 JobSet 时写入 spec，后续 Reconcile 不用原始模板覆盖实际对象。
+
+为避免用户修改 AIJob 后产生“YAML 已更新、实际 JobSet 没更新”的假象，本教学 API 把 `AIJob.spec` 也定义为创建后不可变。修改 Worker 数、镜像或拓扑时应重新创建作业：
+
+```bash
+kubectl delete aijob demo-training
+kubectl apply -f examples/aijob.yaml
+```
+
+生产平台还可以实现显式的升级策略，例如仅允许 suspended 作业重建 JobSet，或为每次 revision 创建新 JobSet；这属于产品语义，不能由通用 Reconcile 自动猜测。
+
+## 八、Scheduler Plugin 的合理边界
 
 插件通过编译期断言实现 Framework 接口：
 
@@ -296,7 +554,7 @@ profiles:
 
 这个实验额外运行一个 `ai-scheduler`，不替换 kind 自带的 `default-scheduler`。JobSet 创建的 Worker Pod 通过 PodTemplate 中的 `schedulerName` 使用它。
 
-## 八、安装和运行
+## 九、安装和运行
 
 本地实验固定使用 Kubernetes 1.34.8、Go 1.24、JobSet 0.10.1 和 Kueue 0.14.3，还需要 Docker、kubectl、kind、make 和 Bash，不需要真实 GPU。Go 依赖使用 Kubernetes 1.34.1，和集群保持相同 minor；`make deploy` 会安装固定版本的 JobSet 和 Kueue。
 
@@ -402,7 +660,7 @@ sudo sysctl -w fs.inotify.max_user_instances=1024
 make clean CLUSTER=ai-infra-lab-v134
 ```
 
-## 九、什么时候才写自定义扩展
+## 十、什么时候才写自定义扩展
 
 优先复用已有能力：
 
@@ -418,7 +676,7 @@ make clean CLUSTER=ai-infra-lab-v134
 
 扩展 Kubernetes 的核心不是尽可能多写 Controller 和 Scheduler，而是在正确的层只补齐标准组件没有表达的领域语义。
 
-## 十、进一步阅读
+## 十一、进一步阅读
 
 - [Kubernetes Controller](https://kubernetes.io/docs/concepts/architecture/controller/)
 - [JobSet](https://jobset.sigs.k8s.io/docs/overview/)
@@ -426,4 +684,7 @@ make clean CLUSTER=ai-infra-lab-v134
 - [Kueue Topology-Aware Scheduling](https://kueue.sigs.k8s.io/docs/concepts/topology_aware_scheduling/)
 - [Kubernetes Scheduling Framework](https://kubernetes.io/docs/concepts/scheduling-eviction/scheduling-framework/)
 - [Kubernetes Dynamic Resource Allocation](https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/)
+- [NVIDIA System Management Interface：拓扑命令](https://docs.nvidia.com/deploy/nvidia-smi/index.html#topology)
+- [NCCL：GPU 通信与拓扑排错](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/gpu_troubleshooting.html)
+- [NCCL：性能测试与调优](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/performance_and_tuning.html)
 - [NVIDIA DRA Driver](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-intro-install.html)
