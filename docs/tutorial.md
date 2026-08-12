@@ -40,29 +40,309 @@ spec:
 
 ```mermaid
 flowchart TD
-    Client[kubectl 业务方和平台服务]
-    API[API Server<br/>认证 校验 Kubernetes API]
-    Etcd[etcd<br/>持久化期望状态与实际状态]
-    Watch[控制循环 Watch API 对象]
-    Reconcilers[kube-controller-manager<br/>kube-scheduler<br/>AIJob JobSet Kueue 控制器]
-    WriteBack[通过 API Server 写回<br/>新资源 决策 Status Pod Binding]
-    NodeState[API Server 中的<br/>Pod 与 Node 状态]
-    Kubelet[kubelet<br/>管理一台 Node 上的 Pod]
-    Runtime[containerd 和 OCI runtime]
-    Process[容器进程]
+    subgraph Clients[集群外客户端]
+        direction TB
+        Client[kubectl 业务方和平台服务]
+    end
 
-    Client --> API
-    API --> Etcd
-    API --> Watch
-    Watch --> Reconcilers
-    Reconcilers --> WriteBack
-    WriteBack --> NodeState
-    NodeState --> Kubelet
+    subgraph ControlPlane[Kubernetes Control Plane]
+        direction TB
+        API[API Server<br/>唯一 Kubernetes API 入口]
+        Etcd[etcd<br/>持久化 API 对象]
+        Channel[Kubernetes API 操作<br/>List Watch Create Update Bind Status]
+        subgraph ControlLoops[独立的控制循环]
+            direction TB
+            ControllerManager[kube-controller-manager<br/>Deployment Job 等内置 Controller]
+            Scheduler[kube-scheduler<br/>选择 Node 写回 Pod Binding]
+            Extension[扩展 Controller<br/>AIJob JobSet Kueue]
+        end
+    end
+
+    subgraph WorkerNode[Worker Node]
+        direction TB
+        Kubelet[kubelet<br/>Watch 绑定到本 Node 的 Pod]
+        Runtime[containerd 和 OCI runtime]
+        Process[容器进程]
+    end
+
+    Client -->|HTTP create get update| API
+    API -->|read write| Etcd
+    Etcd -->|stored API objects| API
+    API --> Channel
+    Channel --> ControllerManager
+    ControllerManager ~~~ Scheduler
+    Scheduler ~~~ Extension
+    Extension ~~~ Kubelet
     Kubelet --> Runtime
     Runtime --> Process
 ```
 
-图为了保持纵向，把同一个 API Server 的“写回入口”画成了 `WriteBack` 阶段，它不是另一个组件。`etcd` 只由 API Server 直接访问。Controller、Scheduler 和 kubelet 都 Watch API 对象，再把决策或状态写回 API Server。例如 Scheduler 不会远程启动容器，它只把 Pod 绑定到选中的 Node；对应 Node 上的 kubelet 观察到绑定结果后才启动容器。
+三个控制循环之间没有箭头；它们都通过图中的 API 通道独立 List/Watch 和写回。下一张时序图会展示真实交互。`etcd` 只由 API Server 直接访问，Controller、Scheduler 和 kubelet都不直接读写 etcd。
+
+### 先理解 API 对象：metadata、spec 和 status
+
+Kubernetes 组件协作的媒介不是函数调用，而是 API 对象。一个典型对象可以简化为：
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: worker-0
+  resourceVersion: "1382"
+spec:
+  containers:
+    - name: worker
+      image: training:v1
+  nodeName: ""
+status:
+  phase: Pending
+```
+
+- `metadata`：对象身份和版本，包括名称、namespace、labels、ownerReferences 和 `resourceVersion`；
+- `spec`：用户或 Controller 声明的期望，例如镜像、资源请求和副本数；
+- `status`：负责运行该对象的组件观察到的结果，例如 Pod phase、条件和容器状态；
+- `resourceVersion`：API Server 为对象版本维护的标识，Watch 和并发更新用它判断“从哪个版本继续”以及“对象是否已被别人修改”。
+
+不是所有对象都有完全相同的 spec/status 规则，但这个模型足以理解 Controller：它读取对象，比较期望与观察结果，然后创建、更新或删除其他 API 对象，并在需要时更新 status。
+
+### List、Watch 和 Informer 到底是什么
+
+假设 Controller 需要关注所有 Job。最直接但错误的写法是每秒查询一次：
+
+```text
+GET /apis/batch/v1/jobs
+等待一秒
+再次 GET 全部 Job
+```
+
+这会重复传输大量未变化的数据。Kubernetes 客户端通常组合两种 API：
+
+- **List**：启动时获取当前已有的全部目标对象，相当于拿一次完整快照；
+- **Watch**：从某个 `resourceVersion` 开始保持长连接，只接收之后的 Added、Modified、Deleted 事件。
+
+但是 Watch 连接会断开，事件可能重复，Controller 也可能重启。`Informer` 就是 client-go 提供的通用封装，用来可靠地管理这套观察过程：
+
+```mermaid
+flowchart TD
+    List[1 List<br/>取得当前对象快照]
+    Watch[2 Watch<br/>持续接收对象变化]
+    Informer[3 Informer<br/>维护 List Watch 与重连]
+    Cache[4 本地 Cache<br/>保存最近观察到的对象]
+    Handler[5 事件处理器<br/>提取 namespace/name]
+    Queue[6 Workqueue<br/>排队 去重 失败退避]
+    Reconcile[7 Reconcile<br/>按 key 读取最新对象并计算动作]
+    Write[8 Client 写回 API Server]
+    Event[9 新变化再次触发 Watch]
+
+    List --> Informer
+    Watch --> Informer
+    Informer --> Cache
+    Cache --> Handler
+    Handler --> Queue
+    Queue --> Reconcile
+    Reconcile --> Write
+    Write --> Event
+    Event --> Watch
+```
+
+每个名词的职责如下：
+
+| 名词 | 在哪里 | 负责什么 | 不负责什么 |
+| --- | --- | --- | --- |
+| Informer | Controller 进程内部的客户端库 | List、Watch、断线重连、更新本地缓存、分发事件 | 不决定应该创建几个 Pod |
+| Cache | Controller 进程内存 | 保存最近观察到的对象，减少每次 Reconcile 都请求 API Server | 不是事实来源，可能短暂落后于 API Server |
+| Event Handler | Controller 进程内部 | 把对象变化转换为待处理 key，通常是 `namespace/name` | 通常不在这里执行复杂业务逻辑 |
+| Workqueue | Controller 进程内存 | 排队、合并重复 key、控制并发、失败后限速重试 | 不保存 Kubernetes 业务状态 |
+| Reconcile | Controller 的业务入口 | 根据 key 读取最新对象，计算并执行本次幂等动作 | 不假设每个事件只出现一次，也不依赖严格事件顺序 |
+
+例如 `default/training-job` 在短时间内被修改三次，队列不一定要求 Reconcile 严格消费三个完整事件。它可以只保留“这个 key 需要重新处理”。Reconcile 随后从 Cache 或 API Server 读取该对象的最新版本，以当前事实重新计算。
+
+这也是为什么 Controller 必须幂等：同一个 key 可能因为重复事件、定期同步或失败重试被处理多次。无论执行一次还是多次，最终资源都应该收敛到相同结果。
+
+Controller-runtime 为本项目提供了 Informer、Cache、Workqueue 和 Worker 管理。`Reconcile` 是我们填入领域规则的位置。Scheduler 和 kubelet也使用 Watch 与本地状态，但它们有各自专门的调度队列和节点同步机制，不能把所有组件都简单称为 Controller Informer。
+
+### 先记住 Controller、Scheduler 和 kubelet 的分工
+
+| 组件 | 它回答的问题 | 典型输出 |
+| --- | --- | --- |
+| Controller | “为了满足上层对象的期望，还应该创建、更新或删除什么对象？” | Deployment Controller 创建 ReplicaSet，Job Controller 创建 Pod，AIJob Controller 创建 JobSet |
+| Scheduler | “这个已经存在但尚未绑定的 Pod 应该去哪台 Node？” | 通过 API Server 写入 Pod Binding |
+| kubelet | “已经分给本 Node 的 Pod 怎样在本机运行？” | 调用容器运行时，准备网络、存储、设备，并更新 Pod status |
+
+一句话记忆：
+
+> Controller 管“应该存在什么”，Scheduler 管“Pod 放在哪里”，kubelet管“怎样在这台机器上运行”。
+
+Controller 和 Scheduler 都不创建容器进程。Controller 可以创建 **实际的 Pod API 对象**；Scheduler 不接收所谓“创建计划”，它观察的就是已经持久化的 Pod 对象。
+
+### 从一份 Job YAML 到容器进程
+
+假设用户提交一个需要四个 Worker 的 Job。完整过程如下：
+
+这里还会出现几个运行时术语：
+
+- **Admission**：API Server 持久化对象前运行的准入阶段，可做默认值填充、策略校验或对象修改；
+- **CNI**：容器网络接口规范，kubelet通过实现该规范的网络插件为 Pod 配置网络；
+- **CRI**：kubelet调用容器运行时的接口规范，本实验中运行时实现是 containerd；
+- **Pod Sandbox**：容器运行时为一个 Pod 准备的共享运行环境，通常包括网络 namespace；业务容器随后加入其中；
+- **OCI runtime**：最终按照 OCI 规范创建容器 Linux 进程的底层运行时，例如 runc。
+
+下面画的是“从 Job 到容器”的系统状态机，不是 Kubernetes 官方只针对单个 Pod 定义的 `status.phase` 状态机：
+
+```mermaid
+stateDiagram-v2
+    direction TB
+
+    [*] --> YAML
+    state "Job：未提交
+    Pod：未创建" as YAML
+    state "Job：已持久化
+    Pod：未创建" as JobStored
+    state "Job：已持久化
+    Pod：已创建
+    phase：Pending
+    nodeName：空" as PodUnbound
+    state "Job：已持久化
+    Pod：已绑定
+    phase：Pending
+    nodeName：已设置" as PodBound
+    state "Pod：准备中
+    phase：Pending
+    container state：Waiting
+    reason：ContainerCreating" as Preparing
+    state "Pod：运行中
+    phase：Running
+    container state：Running
+    Ready：False" as Running
+    state "Pod：可接收工作
+    phase：Running
+    container state：Running
+    Ready：True" as Ready
+    state "Pod：正常结束
+    phase：Succeeded
+    container state：Terminated" as Succeeded
+    state "Pod：失败
+    phase：Failed
+    container state：Terminated" as Failed
+
+    YAML --> JobStored: kubectl -> API Server<br/>认证 授权 Admission 校验<br/>API Server 写入 etcd
+    JobStored --> PodUnbound: Job Controller Watch 到 Job<br/>创建四个实际 Pod 对象<br/>API Server 写入 etcd
+    PodUnbound --> PodBound: Scheduler Filter Score Bind<br/>通过 API Server 写入 Node<br/>API Server 写入 etcd
+    PodUnbound --> PodUnbound: 暂无可行 Node<br/>保持 Pending 等待重试
+    PodBound --> Preparing: 目标 Node 的 kubelet Watch 到 Pod<br/>开始本机准备
+    Preparing --> Preparing: 拉镜像 挂载 Volume<br/>配置 CNI 分配设备或重试
+    Preparing --> Running: kubelet通过 CRI 调用 containerd<br/>创建 Sandbox 和容器进程<br/>写回 Pod status
+    Running --> Ready: readiness probe 通过
+    Ready --> Running: readiness probe 失败<br/>容器仍然运行但暂不接流量
+    Running --> Succeeded: 主进程退出码为 0<br/>且不再重启
+    Ready --> Succeeded: 工作完成且正常退出
+    Running --> Failed: 启动或运行失败<br/>超过重启或 Job 重试策略
+    Ready --> Failed: 运行期间发生不可恢复错误
+    Succeeded --> [*]
+    Failed --> [*]
+```
+
+读图时注意：转移边上的组件负责推动变化，状态框描述 API Server 中可以观察到的对象状态。API Server 负责校验、持久化和发布 Watch 事件，但不替 Controller、Scheduler 或 kubelet做决策。
+
+这里需要区分三个概念：
+
+- **Pod 模板**：Deployment、Job 或 JobSet spec 中用于生成 Pod 的模板；
+- **Pod API 对象**：Controller 调用 API Server 后真正创建并持久化的对象；
+- **容器进程**：kubelet和 containerd 根据已绑定的 Pod 对象在 Node 上创建的 Linux 进程。
+
+因此“创建 Pod”在不同语境中可能被混用。严格说：Controller 创建 Pod API 对象，Scheduler 绑定 Pod，kubelet和 runtime 创建容器进程。
+
+### Pending 是谁标记的
+
+`Pending` 不是 Controller 向 API Server 汇报“工作完成”时手工设置的标记。Pod 被 API Server 接受后，在主容器成功启动前通常处于 Pending 生命周期阶段。
+
+Scheduler 完成 Binding 后，Pod 仍可能因为镜像拉取、Volume 挂载、CNI、GPU 分配、init container 或 runtime 问题停留在 Pending。Readiness 失败则通常是 `Running` 但 `READY 0/1`，不是 Pending。
+
+最短排查路径：
+
+```bash
+kubectl get pod <pod> -o wide
+kubectl describe pod <pod>
+kubectl get events --sort-by=.lastTimestamp
+```
+
+- `nodeName` 为空：看 Scheduler 事件，例如 CPU、内存、GPU、亲和性、污点或 PVC 不满足；
+- `nodeName` 已设置：看 kubelet阶段，例如镜像、Volume、CNI、设备或 runtime；
+- `Running` 但 `0/1 Ready`：再看 readiness probe 与应用日志；
+- `CrashLoopBackOff`：看容器退出原因、启动日志和 liveness probe。
+
+### 可以把 API Server 理解成后端、etcd 理解成数据库吗
+
+作为第一层理解，这个类比是成立的：
+
+| Kubernetes 组件 | Web 系统类比 | 实际职责 |
+| --- | --- | --- |
+| API Server | 后端 API / 统一网关 | 暴露 Kubernetes REST API，完成认证、授权、Admission、默认值、Schema 校验、版本转换和并发控制 |
+| etcd | 数据库 / 持久化层 | 保存 Kubernetes API 对象及其版本，是集群状态的事实来源 |
+| Controller / Scheduler | 后台 Worker | 持续观察对象，进行计算，然后通过 API Server 创建或更新对象 |
+| kubelet | 每台机器上的执行 Agent | 观察分配给本 Node 的 Pod，调用容器运行时并上报状态 |
+
+但不能把它理解成传统的同步调用链：
+
+```text
+组件请求 API Server
+  -> API Server 返回下一步命令
+  -> 组件执行命令
+```
+
+API Server 通常不告诉 Controller 或 Scheduler“下一步该做什么”。它主要提供资源状态与事件流。以 Controller 为例，执行机制是：
+
+```text
+Informer 首次 List 并建立本地 Cache
+  -> Informer 通过 Watch 持续更新 Cache
+  -> Event Handler 把对象 key 放入 Workqueue
+  -> Reconcile 按 key 读取最新对象
+  -> 根据期望状态和观察结果计算下一动作
+  -> Client 调用 API Server 写回资源或 status
+  -> 写回产生新 Watch 事件并再次调谐
+```
+
+因此更准确的说法是：API Server 类似“统一后端接口 + 资源模型 + 事件流入口”，etcd 是它背后的持久化层；Controller、Scheduler 和 kubelet是独立的异步 Worker。Controller 通常通过 client-go 的 Informer Cache 读取对象，并不为每个判断都同步请求 API Server。
+
+### Controller 和 Scheduler 如何接力
+
+Controller 与 Scheduler 不直接通信，也没有 `controller.Schedule(pod)` 这样的调用。它们通过 API Server 中的 Pod 对象接力：
+
+```mermaid
+sequenceDiagram
+    participant C as Controller
+    participant A as API Server
+    participant E as etcd
+    participant S as Scheduler
+    participant K as kubelet
+    participant R as containerd
+
+    C->>A: 创建 Pod spec.nodeName 为空
+    A->>E: 持久化 Pod
+    A-->>S: Watch 事件 未绑定 Pod
+    S->>A: 写入 Binding 选择 Node
+    A->>E: 持久化绑定结果
+    A-->>K: Watch 事件 Pod 已绑定本 Node
+    K->>R: 通过 CRI 创建 Sandbox 和容器
+    K->>A: 更新 Pod status
+    A->>E: 持久化 status
+```
+
+若业务方直接创建一个裸 Pod，可能完全没有 Controller 参与：API Server 直接持久化 Pod，Scheduler 仍会为它选择 Node，kubelet仍会启动容器。Controller 的存在取决于是否有更上层对象需要持续维护，而 Scheduler 是否参与取决于 Pod 是否已经指定或绑定 Node。
+
+### 后文会用到的术语地图
+
+| 术语 | 所属层次 | 先记住什么 |
+| --- | --- | --- |
+| CRD | API 扩展 | 向 API Server 注册一种新的资源结构，例如 AIJob；CRD 是定义，AIJob 对象是数据 |
+| OwnerReference | 对象生命周期 | 表示一个对象由另一个对象拥有，所有者删除后 Garbage Collector 可以清理下游对象 |
+| Condition | status 表达 | 用 type、status、reason、message 表达对象当前处境，例如是否 Admitted 或 Completed |
+| Leader Election | Controller 高可用 | 多副本 Controller 中通常只有 leader 执行写操作，leader 故障后其他副本接管 |
+| Filter / Score / Bind | Scheduler 阶段 | Filter 排除不可用 Node，Score 比较剩余 Node，Bind 记录最终 Node |
+| Device Plugin | 设备层 | 向 kubelet暴露 `nvidia.com/gpu` 等扩展资源，并在 Pod 启动时分配设备 |
+| DRA | 设备层 | 用 DeviceClass、ResourceClaim、ResourceSlice 等 API 表达比“设备数量”更丰富的选择与分配 |
+| JobSet | 作业生命周期 | 在多个 Kubernetes Job 之上提供分布式任务的整组生命周期和网络能力 |
+| Kueue | 作业准入 | 在创建大量 Pod 前处理队列、配额、整组准入和跨 Node 拓扑 |
 
 在这个基础上，本项目增加了下面的资源与控制器链：
 
@@ -151,9 +431,9 @@ kube-scheduler 在可行 Node 中选择一个 Node。Scheduler Framework 插件�
 
 ## 三、状态机与 Reconcile 的关系
 
-Controller-runtime 已经通用化了 Informer、缓存、Workqueue、失败退避、并发 Worker 和 Leader Election。业务代码不应该再次实现这些设施。
+前文已经说明 Controller-runtime 提供的 Informer、Cache 和 Workqueue。它还管理并发 Worker、失败退避和 Leader Election，业务代码不需要再次实现这些执行设施。
 
-但 Reconcile 接收的不是严格有序、仅消费一次的领域事件。通知可能重复、合并或延迟，Controller 也可能在任意一步崩溃，因此 API Server 中的资源才是事实来源。
+这里需要强调执行机制与业务规则的边界：Informer 负责观察，Workqueue 负责安排处理，Reconcile 才负责本项目的业务决策。Reconcile 接收的不是严格有序、仅消费一次的领域事件；通知可能重复、合并或延迟，Controller 也可能在任意一步崩溃，因此 API Server 中的资源才是事实来源。
 
 工程上通常把一次 Reconcile 拆成下面的阶段：
 
