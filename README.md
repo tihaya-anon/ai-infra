@@ -1,6 +1,6 @@
-# Kubernetes AIJob Controller 与 GPU 拓扑调度插件
+# Kubernetes AIJob、JobSet 与 GPU 拓扑调度
 
-这是一个面向 AI Infra 入门的最小实验：使用 controller-runtime 实现 `AIJob` Reconcile，并通过 Scheduler Framework `ScorePlugin` 扩展默认 kube-scheduler 的 GPU 拓扑偏好。
+这是一个面向 AI Infra 入门的实验：使用薄 `AIJob` Controller 生成 JobSet，复用 Kueue 完成队列和整组拓扑准入，并通过 Scheduler Framework `ScorePlugin` 演示集群特有的 GPU 节点偏好。具体 GPU 的 PCIe/NVLink 设备分配属于 DRA 或厂商设备驱动。
 
 先阅读 [教程](docs/tutorial.md)，再运行：
 

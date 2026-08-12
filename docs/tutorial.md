@@ -1,18 +1,22 @@
-# 用 Controller Runtime 与 Scheduler Framework 扩展 Kubernetes
+# 用 Kubernetes 标准组件扩展 AI 训练任务
 
-这个项目演示一条更接近生产的 AI Infra 开发路径：业务方声明 `AIJob`，Controller 将它翻译为 GPU Worker Pod，Scheduler Framework 插件在默认 kube-scheduler 的打分阶段加入 NVLink、PCIe 与机架亲和度。
+这个项目演示生产中更常见的 AI Infra 分层：业务方声明 `AIJob`，一个很薄的 Controller 将它翻译为 `JobSet`；JobSet 管理分布式任务生命周期，Kueue 负责整组准入、配额和跨节点拓扑，kube-scheduler 与设备驱动完成节点和 GPU 分配。
 
-我们不重写调度队列、资源过滤、抢占或 Bind。它们由 kube-scheduler 负责；项目只实现 AI 场景独有的扩展点。
+项目仍保留一个 Scheduler Framework 插件，用来展示标准调度器无法表达的集群级节点偏好。它不是 Job Controller，也不能替代设备驱动。
+
+> 本文先描述目标架构。仓库将分两个提交迁移：文档提交完成后，代码再从“Controller 直接管理 Pod”改为“Controller 管理 JobSet”。
 
 ## 一、业务方如何使用
 
-平台组件安装完成后，训练业务只提交 YAML：
+平台组件安装完成后，训练业务只提交声明式 YAML：
 
 ```yaml
 apiVersion: infra.example.io/v1alpha1
 kind: AIJob
 metadata:
   name: demo-training
+  labels:
+    kueue.x-k8s.io/queue-name: training
 spec:
   workers: 4
   gpuPerWorker: 2
@@ -21,182 +25,240 @@ spec:
   image: registry.example.com/training:v1
 ```
 
-字段表达的是业务意图：
+字段表达业务意图：
 
 - `workers`：分布式训练的 Worker 数量；
 - `gpuPerWorker`：每个 Worker 请求的 GPU 数量；
-- `gpuResource`：Device Plugin 上报的扩展资源名；
-- `topology`：`nvlink`、`pcie` 或 `same-rack`；
-- `image`：训练镜像。
+- `gpuResource`：Device Plugin 或 DRA 暴露的资源名；
+- `topology`：实验中的 `nvlink`、`pcie` 或 `same-rack`；
+- `image`：训练镜像；
+- `kueue.x-k8s.io/queue-name`：任务进入的 LocalQueue。
 
-业务方不创建 Pod，也不直接选择 Scheduler。Controller 统一生成 Worker Pod并写入：
+业务方不创建 Pod，不指定某个 Node，也不负责在代码中调用 Controller 或 Scheduler。各组件通过 Kubernetes API 中的资源协作。
 
-```yaml
-spec:
-  schedulerName: ai-scheduler
-  containers:
-    - resources:
-        limits:
-          nvidia.com/gpu: 2
-metadata:
-  annotations:
-    infra.example.io/gpu-topology: nvlink
-```
-
-## 二、系统分工
+## 二、生产架构的职责边界
 
 ```mermaid
 flowchart TD
     User[业务方提交 AIJob]
     API[API Server]
-    Controller[controller-runtime AIJobReconciler]
-    Pod[Worker Pod]
-    Scheduler[完整 kube-scheduler]
-    Defaults[默认插件: 资源 污点 亲和性 Volume 抢占]
-    GPU[GPUTopology ScorePlugin]
-    Bind[默认 Bind 插件]
-    Kubelet[kubelet 启动 Worker]
+    Adapter[AIJob Controller<br/>翻译业务 API]
+    JobSet[JobSet Controller<br/>任务生命周期]
+    Kueue[Kueue<br/>队列 配额 整组准入]
+    TAS[Topology-Aware Scheduling<br/>机架与网络域]
+    Scheduler[kube-scheduler<br/>选择 Node]
+    Plugin[可选 Scheduler Plugin<br/>集群特有节点偏好]
+    DRA[DRA 或 Device Plugin<br/>选择和准备具体设备]
+    Kubelet[kubelet 启动容器]
 
     User --> API
-    API --> Controller
-    Controller --> Pod
-    Pod --> Scheduler
-    Scheduler --> Defaults
-    Defaults --> GPU
-    GPU --> Bind
-    Bind --> Kubelet
+    API --> Adapter
+    Adapter --> JobSet
+    JobSet --> Kueue
+    Kueue --> TAS
+    TAS --> Scheduler
+    Scheduler --> Plugin
+    Plugin --> DRA
+    DRA --> Kubelet
 ```
 
-Controller 回答“AIJob 应该产生哪些 Pod”。Scheduler 插件回答“通过默认硬约束的 Node 中，哪个 GPU 拓扑更合适”。
+### AIJob Controller
 
-### 为什么插件不直接读取 AIJob
+Controller 只负责 AI 领域 API 的适配：
 
-Scheduler Framework 的核心输入是 Pod 和 Node，而不是任意 CRD。Controller 负责做一次 API 翻译：
+1. 读取 `AIJob.spec`；
+2. 生成或更新一个由它拥有的 `JobSet`；
+3. 把 JobSet 的 Condition 和计数汇总到 `AIJob.status`。
+
+它不再逐个创建、删除和统计 Worker Pod。
+
+### JobSet
+
+JobSet 复用 Kubernetes Job，负责通用的分布式任务能力：
+
+- 创建和管理一组 Indexed Job；
+- 稳定的 Worker DNS；
+- 完成、失败和整组重启策略；
+- suspend/resume；
+- leader/worker 等多模板任务。
+
+### Kueue
+
+Kueue 是 Job 级管理器，不替代 kube-scheduler。它在任务开始创建 Pod 之前决定：
+
+- 队列是否有配额；
+- 所有 Worker 是否能作为一组获得资源；
+- 使用哪个 ResourceFlavor；
+- Worker 应位于哪个 rack、block 或其他拓扑域。
+
+AIJob 通过 JobSet 使用 Kueue 已有集成，不需要重新实现 Kueue 的 `GenericJob` 接口。
+
+### kube-scheduler 和设备层
+
+kube-scheduler 在可行 Node 中选择一个 Node。Scheduler Framework 插件可以补充公司特有的节点过滤或打分，但默认插件继续负责 CPU、内存、扩展资源、污点、Volume 和抢占。
+
+选择 Node 内的具体 GPU 不属于普通 `ScorePlugin` 的职责。它应由以下组件负责：
+
+- 传统集群：GPU Device Plugin 与 kubelet Topology Manager；
+- 新集群：DRA Driver、`DeviceClass`、`ResourceClaim` 和 `ResourceSlice`；
+- NVIDIA Multi-Node NVLink：支持 ComputeDomain 的 NVIDIA DRA Driver。
+
+## 三、状态机与 Reconcile 的关系
+
+Controller-runtime 已经通用化了 Informer、缓存、Workqueue、失败退避、并发 Worker 和 Leader Election。业务代码不应该再次实现这些设施。
+
+但 Reconcile 接收的不是严格有序、仅消费一次的领域事件。通知可能重复、合并或延迟，Controller 也可能在任意一步崩溃，因此 API Server 中的资源才是事实来源。
+
+工程上通常把一次 Reconcile 拆成下面的阶段：
 
 ```mermaid
 flowchart TD
-    AIJob[AIJob topology: nvlink]
-    Reconcile[AIJobReconciler]
-    Annotation[Pod annotation: gpu-topology=nvlink]
-    Plugin[GPUTopology Plugin]
-    Labels[Node labels: fabric/rack]
-    Score[Node Score]
+    Load[读取 AIJob 与 JobSet]
+    Observe[观察当前事实]
+    Plan[计算期望 JobSet 与 Condition]
+    Apply[幂等 Apply 或 Patch]
+    Status[更新 AIJob Status]
+    Retry[等待 Watch 或失败重试]
 
-    AIJob --> Reconcile
-    Reconcile --> Annotation
-    Annotation --> Plugin
-    Labels --> Plugin
-    Plugin --> Score
+    Load --> Observe
+    Observe --> Plan
+    Plan --> Apply
+    Apply --> Status
+    Status --> Retry
+    Retry --> Load
 ```
 
-这样 Scheduler 插件不依赖 AIJob Client，也不需要在每次节点打分时访问 API Server。
+程序员维护的是 `观察结果 -> 下一动作和状态` 的业务规则；Controller-runtime 维护执行机制。复杂任务可以显式定义状态和转移函数，但每次处理仍需幂等，并能从 Kubernetes 资源重建状态。
 
-## 三、项目阅读顺序
+本项目的状态以标准 Condition 表达，而不是只维护一个容易过期的枚举：
+
+```yaml
+status:
+  observedGeneration: 3
+  conditions:
+    - type: Ready
+      status: "False"
+      reason: WaitingForAdmission
+      observedGeneration: 3
+```
+
+`observedGeneration` 用来区分 Condition 描述的是当前 spec，还是用户修改前的旧 spec。
+
+## 四、拓扑需求应定义在哪里
+
+“拓扑”至少包含三个层次，不能只用一个 Node Label 解决。
+
+| 层次 | 示例 | 负责组件 |
+| --- | --- | --- |
+| 跨节点放置 | 同 rack、同 leaf switch、同 NVLink domain | Kueue TAS |
+| Node 选择 | GPU 型号、缓存命中、公司特有评分 | kube-scheduler 默认插件或自定义插件 |
+| Node 内设备 | 同 NUMA、同 PCIe root、GPU 间 NVLink | DRA/Device Plugin/Topology Manager |
+
+### 跨节点拓扑
+
+Kueue TAS 面向整个 PodSet 做资源准入，而不是等第一个 Worker 调度后再让其他 Worker 跟随。生产中可以把 AIJob 的严格性翻译为 JobSet PodTemplate 上的注解：
+
+```yaml
+metadata:
+  annotations:
+    kueue.x-k8s.io/podset-required-topology: topology.kubernetes.io/rack
+```
+
+如果只是偏好同一拓扑域，则使用 `podset-preferred-topology`。具体键由集群管理员在 Kueue `Topology` 中定义。
+
+### Node 内 GPU 拓扑
+
+普通 Scheduler Plugin 只给 Node 打分，无法保证容器最终拿到哪几张 GPU。要表达“多张 GPU 共享 PCIe root”或“设备之间存在 NVLink”，设备驱动需要把这些属性发布为 DRA 设备属性，再由 `ResourceClaim` 的 selector/constraint 请求合适的设备组合。
+
+本实验没有真实 GPU，所以只能用 Node Label 模拟节点级 `nvlink` 和 `pcie` 偏好。这是教学替身，不是生产设备分配方案。
+
+## 五、项目阅读顺序
+
+代码迁移完成后，建议按业务声明到基础设施的方向阅读：
 
 ```mermaid
 flowchart TD
-    Example[1. examples/aijob.yaml]
-    CRD[2. deploy/crd.yaml]
-    Types[3. api/v1alpha1]
-    Controller[4. internal/controller]
-    Plugin[5. internal/plugin/gputopology]
-    Register[6. cmd/scheduler/main.go]
-    Config[7. deploy/scheduler-config.yaml]
-    Runtime[8. deploy 与 scripts]
+    Example[1 examples/aijob.yaml]
+    CRD[2 deploy/crd.yaml]
+    Types[3 api/v1alpha1]
+    Controller[4 internal/controller]
+    JobSetManifest[5 JobSet 与 Kueue 部署]
+    Plugin[6 internal/plugin/gputopology]
+    Register[7 cmd/scheduler/main.go]
+    Runtime[8 deploy scripts Makefile]
 
     Example --> CRD
     CRD --> Types
     Types --> Controller
-    Controller --> Plugin
+    Controller --> JobSetManifest
+    JobSetManifest --> Plugin
     Plugin --> Register
-    Register --> Config
-    Config --> Runtime
+    Register --> Runtime
 ```
 
-1. `examples/aijob.yaml`：先看业务方声明什么。
-2. `deploy/crd.yaml`：看 API Server 如何注册和校验 AIJob。
-3. `api/v1alpha1`：看强类型 `AIJobSpec`、`AIJobStatus` 与 Scheme 注册。
-4. `internal/controller/aijob_controller.go`：只关注 `Reconcile` 如何创建 Worker Pod。
-5. `internal/plugin/gputopology/plugin.go`：看 `PreScorePlugin` 和 `ScorePlugin` 的实现。
-6. `cmd/scheduler/main.go`：看插件如何注册到 kube-scheduler 二进制。
-7. `deploy/scheduler-config.yaml`：看 scheduler profile 如何启用插件和配置权重。
-8. `deploy/controller.yaml`、`deploy/rbac.yaml` 与 `scripts/label-nodes.sh`：最后看运行和权限。
+1. `examples/aijob.yaml`：业务方声明的训练需求。
+2. `deploy/crd.yaml`：API Server 如何注册和校验 AIJob。
+3. `api/v1alpha1`：`AIJobSpec`、Condition 和 Scheme 注册。
+4. `internal/controller/aijob_controller.go`：AIJob 如何被翻译成 JobSet。
+5. JobSet/Kueue manifest：通用任务生命周期、队列与拓扑如何接管。
+6. `internal/plugin/gputopology/plugin.go`：仍需自定义时，如何实现节点打分扩展点。
+7. `cmd/scheduler/main.go` 与 `deploy/scheduler-config.yaml`：插件如何注册和启用。
+8. `deploy/`、`scripts/` 与 `Makefile`：最后看安装、权限和本地实验。
 
-## 四、Controller：只写 Reconcile
+## 六、AIJob Controller 的目标形态
 
-Controller 使用 `controller-runtime`。入口声明它管理 AIJob，并监听自己创建的 Pod：
+入口声明它管理 AIJob，并监听自己创建的 JobSet：
 
 ```go
 return ctrl.NewControllerManagedBy(manager).
     For(&aiv1alpha1.AIJob{}).
-    Owns(&corev1.Pod{}).
+    Owns(&jobsetv1alpha2.JobSet{}).
     Complete(r)
 ```
 
-`AIJobReconciler` 实现的是 controller-runtime 的接口：
+Go 通过方法集合隐式实现接口，可以用编译期断言明确契约：
 
 ```go
 var _ reconcile.Reconciler = &AIJobReconciler{}
-
-func (r *AIJobReconciler) Reconcile(
-    ctx context.Context,
-    request ctrl.Request,
-) (ctrl.Result, error)
 ```
 
-Reconcile 只表达业务逻辑：
-
-1. 获取 AIJob；
-2. 列出它拥有的 Worker Pod；
-3. 创建缺少的 Worker，删除缩容后多余的 Worker；
-4. 汇总并更新 status。
-
-Informer、缓存、Workqueue、失败退避和 Worker goroutine 仍然存在，但由 controller-runtime 管理。理解它们有助于排障，不需要在入门项目中手写。
-
-OwnerReference 由下面的调用设置：
+Reconcile 的主路径保持在同一抽象层：
 
 ```go
-ctrl.SetControllerReference(job, pod, r.Scheme)
+func (r *AIJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+    job, err := r.loadAIJob(ctx, req.NamespacedName)
+    if err != nil {
+        return ctrl.Result{}, client.IgnoreNotFound(err)
+    }
+
+    desired := desiredJobSet(job)
+    if err := r.applyJobSet(ctx, job, desired); err != nil {
+        return ctrl.Result{}, err
+    }
+    return ctrl.Result{}, r.reconcileStatus(ctx, job, desired)
+}
 ```
 
-因此删除 AIJob 后，Kubernetes Garbage Collector 会回收 Worker Pod。
+辅助函数分别负责读取、构造、写入和状态归约，避免一个函数同时处理所有细节。所有写入都必须允许重复执行。
 
-## 五、Scheduler：扩展默认调度器
+OwnerReference 仍由下面的调用设置：
 
-### 1. 明确实现 Framework 接口
+```go
+ctrl.SetControllerReference(aiJob, jobSet, r.Scheme)
+```
 
-插件包含编译期接口断言：
+删除 AIJob 后，Kubernetes Garbage Collector 会回收 JobSet；JobSet Controller 再清理其拥有的 Job 和 Pod。
+
+## 七、Scheduler Plugin 的合理边界
+
+插件通过编译期断言实现 Framework 接口：
 
 ```go
 var _ framework.PreScorePlugin = &Plugin{}
 var _ framework.ScorePlugin = &Plugin{}
 ```
 
-Go 没有 `implements` 关键字，只要方法集合匹配就实现接口；上述断言会在签名不匹配时直接编译失败。
-
-插件实现三个关键方法：
-
-```go
-func (p *Plugin) Name() string
-func (p *Plugin) PreScore(...) *framework.Status
-func (p *Plugin) Score(...) (int64, *framework.Status)
-```
-
-### 2. 为什么使用 PreScore
-
-同一 Pod 会针对许多候选 Node 调用 `Score`。`PreScore` 每个调度周期只执行一次，适合计算可复用状态。
-
-例如 `same-rack` 会先查找同一 AIJob 已运行 Worker 所在的机架，然后写入 `CycleState`：
-
-```go
-state.Write(stateKey, &cycleData{preferredRack: rack})
-```
-
-后续每次 `Score` 直接读取，不重复扫描集群快照。
-
-### 3. Score 只改变偏好
-
-插件当前使用以下简化分值：
+它只对已经通过默认硬约束的 Node 增加分数：
 
 | AIJob 偏好 | Node 标签 | 分数 |
 | --- | --- | ---: |
@@ -204,31 +266,15 @@ state.Write(stateKey, &cycleData{preferredRack: rack})
 | `nvlink` | `gpu-fabric=pcie` | 50 |
 | `pcie` | `gpu-fabric=nvlink` | 100 |
 | `pcie` | `gpu-fabric=pcie` | 80 |
-| `same-rack` | 与已有 Worker 同 rack | 100 |
 | 其他情况 | 无匹配 | 0 |
 
-这是软偏好，所以实现 `ScorePlugin`。如果某项要求不满足就不能运行，例如必须具备 RDMA，应使用 `FilterPlugin` 返回 `Unschedulable`，或者让 Controller 生成标准 NodeAffinity。
+默认 `NodeResourcesFit` 会检查 Pod 的扩展资源请求，因此插件不重复统计 GPU。它也不处理 Taint、Volume、CPU、内存和抢占。
 
-### 4. 谁负责 GPU 容量
+`same-rack` 不再通过“查找已经运行的第一个 Worker”实现。这个做法不能保证整组资源可用，会产生部分 Worker 已运行、其余 Worker 无处可放的情况。整组机架约束交给 Kueue TAS。
 
-默认 `NodeResourcesFit` 插件会检查 Pod 的扩展资源请求：
+### 注册插件
 
-```yaml
-limits:
-  nvidia.com/gpu: 2
-```
-
-因此本插件不重复统计 GPU。它也不处理 Taint、Volume、CPU、内存和抢占，这些继续由默认插件负责。
-
-### 5. 谁选择具体 GPU
-
-Scheduler 选择的是 Node，不是 Node 内的 GPU 编号。具体分配哪张 GPU 通常由 Device Plugin 或 DRA 完成。NVLink/PCIe 拓扑如果只以 Node Label 表达，插件只能选择机器或拓扑域；要精确选择设备，需要结合 DRA、CDI 或厂商设备管理能力。
-
-## 六、注册插件
-
-Scheduler Framework 插件需要编译进 kube-scheduler 二进制，不是运行时上传一个 `.so` 文件。
-
-`cmd/scheduler/main.go` 复用官方 kube-scheduler，并注册一个 out-of-tree 插件工厂：
+Scheduler Framework 插件需要编译进 kube-scheduler 二进制：
 
 ```go
 command := app.NewSchedulerCommand(
@@ -236,7 +282,7 @@ command := app.NewSchedulerCommand(
 )
 ```
 
-`deploy/scheduler-config.yaml` 再通过 profile 启用插件：
+Scheduler profile 再启用对应扩展点：
 
 ```yaml
 profiles:
@@ -251,23 +297,11 @@ profiles:
             weight: 5
 ```
 
-最终 Node 总分由默认插件分数和 `GPUTopology * 5` 共同决定。
+这个实验额外运行一个 `ai-scheduler`，不替换 kind 自带的 `default-scheduler`。JobSet 创建的 Worker Pod 通过 PodTemplate 中的 `schedulerName` 使用它。
 
-实现某个 Go 接口不等于自动启用对应扩展点。这里必须同时在 `preScore` 和 `score` 中配置插件；否则 `PreScore` 不会写入 `CycleState`，后续 `Score` 就无法读取预计算结果。
+## 八、安装和运行
 
-这个实验额外运行一个名为 `ai-scheduler` 的完整 kube-scheduler，不修改 kind 自带的 `default-scheduler`。普通 Pod 不受影响，AIJob Worker 通过 `spec.schedulerName: ai-scheduler` 进入该 profile。
-
-因为运行的是完整 kube-scheduler，ServiceAccount 需要的不只是 Pod 和 Node 权限。`deploy/rbac.yaml` 同时绑定：
-
-- `system:kube-scheduler`：Pod、Node、Binding、Event 等核心调度权限；
-- `system:volume-scheduler`：StorageClass、PV 和 PVC 调度权限；
-- `extension-apiserver-authentication-reader`：读取 API Server 请求头认证配置。
-
-缺少 `system:volume-scheduler` 时，即使 AIJob 不使用 PVC，默认 VolumeBinding 插件的 informer 也无法完成缓存同步，整个调度器不会开始处理 Pod。这正是复用默认调度器时需要接受的完整组件契约。
-
-## 七、安装和运行
-
-需要 Go 1.22+、Docker、kubectl、kind、make 和 Bash，不需要 Kubebuilder、Operator SDK 或真实 GPU。
+本地实验需要 Go 1.22+、Docker、kubectl、kind、make 和 Bash，不需要真实 GPU。代码迁移后，部署还会自动安装与 Kubernetes 版本匹配的 JobSet 和 Kueue。
 
 ```bash
 make test
@@ -276,25 +310,20 @@ make deploy
 make demo
 ```
 
-kind 没有 GPU Device Plugin。`scripts/label-nodes.sh` 会进行两种模拟：
+kind 没有 GPU Device Plugin。`scripts/label-nodes.sh` 会：
 
-1. 给 Node 添加 `gpu-fabric` 和 `rack` 标签；
-2. 在 Node status 中加入 `example.com/gpu: 4` 扩展资源。
+1. 给 Node 添加模拟的 fabric 和 rack 标签；
+2. 在 Node status 中加入 `example.com/gpu` 扩展资源。
 
-示例 AIJob 因此使用：
-
-```yaml
-gpuResource: example.com/gpu
-```
-
-生产环境应改为 Device Plugin 实际上报的 `nvidia.com/gpu` 等资源。
+示例因此使用 `example.com/gpu`。生产环境应安装 GPU Operator、Device Plugin 或 DRA Driver，并改用真实资源与设备属性。
 
 观察结果：
 
 ```bash
 kubectl get aijob
-kubectl get pods -o wide
-kubectl get nodes -L infra.example.io/gpu-fabric,infra.example.io/rack
+kubectl get jobsets
+kubectl get workloads.kueue.x-k8s.io
+kubectl get jobs,pods -o wide
 kubectl -n ai-infra-system logs deployment/aijob-controller
 kubectl -n ai-infra-system logs deployment/ai-scheduler
 ```
@@ -305,32 +334,28 @@ kubectl -n ai-infra-system logs deployment/ai-scheduler
 make clean
 ```
 
-## 八、扩展点怎么选
+## 九、什么时候才写自定义扩展
 
-| 需求 | 扩展点 |
+优先复用已有能力：
+
+| 需求 | 首选组件 |
 | --- | --- |
-| 预计算作业已有 Worker 的拓扑 | `PreScore` |
-| 偏好 NVLink、同机架或模型缓存命中 | `Score` |
-| 必须有 RDMA、特定 GPU 型号或显存规格 | `Filter` |
-| 整组 Worker 同时放行 | `Reserve` + `Permit` |
-| 失败时释放 Gang 预留 | `Unreserve` |
-| 自定义队列公平性 | `QueueSort`，但每个 profile 只能有一个 |
-| 绑定前准备网络或设备 | `PreBind` |
+| Worker 生命周期、重试、稳定 DNS | JobSet / Kubernetes Job |
+| 队列、配额、公平性、抢占 | Kueue |
+| 同 rack、同 block、整组准入 | Kueue TAS |
+| CPU、内存、GPU 数量、污点、Volume | kube-scheduler 默认插件 |
+| NUMA 对齐 | kubelet Topology Manager |
+| 具体 GPU、MIG、PCIe/NVLink 设备关系 | DRA 或厂商 Device Plugin |
+| 公司特有且标准 API 无法表达的 Node 偏好 | Scheduler Framework Plugin |
 
-本项目先只实现 `PreScore + Score`，因为“默认调度器已经能运行 Pod，但不理解 AI 拓扑偏好”正是最小且合理的扩展边界。
+扩展 Kubernetes 的核心不是尽可能多写 Controller 和 Scheduler，而是在正确的层只补齐标准组件没有表达的领域语义。
 
-## 九、版本与生产边界
+## 十、进一步阅读
 
-Scheduler Framework 插件与 Kubernetes 内部包紧密耦合。本项目将 Kubernetes、`client-go`、controller-runtime 和 kind 节点锁定到 1.30 对应版本，并在 `go.mod` 显式对齐 staging modules。升级集群时应同步升级插件并重新编译测试。
-
-生产化还应补充：
-
-- 用 Kubebuilder/controller-gen 生成 DeepCopy、CRD 和 RBAC；
-- Controller 与 Scheduler Leader Election；
-- Node Feature Discovery 或厂商组件自动维护拓扑标签；
-- Scheduler 插件配置类型、指标、Event 和调度性能测试；
-- 对缺失/过期拓扑信息定义降级策略；
-- Gang Scheduling 的 Reserve、Permit 和 Unreserve；
-- 基于 DRA 的设备级拓扑分配。
-
-本项目的重点不再是复刻 Kubernetes 控制循环，而是展示两个稳定扩展面：用 Controller Runtime 扩展声明式 API，用 Scheduler Framework 扩展默认调度决策。
+- [Kubernetes Controller](https://kubernetes.io/docs/concepts/architecture/controller/)
+- [JobSet](https://jobset.sigs.k8s.io/docs/overview/)
+- [Kueue 自定义 Job 集成](https://kueue.sigs.k8s.io/docs/tasks/dev/integrate_a_custom_job/)
+- [Kueue Topology-Aware Scheduling](https://kueue.sigs.k8s.io/docs/concepts/topology_aware_scheduling/)
+- [Kubernetes Scheduling Framework](https://kubernetes.io/docs/concepts/scheduling-eviction/scheduling-framework/)
+- [Kubernetes Dynamic Resource Allocation](https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/)
+- [NVIDIA DRA Driver](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-intro-install.html)
