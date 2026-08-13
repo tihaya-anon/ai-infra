@@ -186,6 +186,7 @@ Controller 和 Scheduler 都不创建容器进程。Controller 可以创建 **�
 - **CRI**：kubelet调用容器运行时的接口规范，本实验中运行时实现是 containerd；
 - **Pod Sandbox**：容器运行时为一个 Pod 准备的共享运行环境，通常包括网络 namespace；业务容器随后加入其中；
 - **OCI runtime**：最终按照 OCI 规范创建容器 Linux 进程的底层运行时，例如 runc。
+- **Probe**：kubelet对已启动容器执行的检查；startup 判断启动是否完成，readiness 判断是否接收流量，liveness 判断是否需要杀死并重启容器。
 
 下面画的是“从 Job 到容器”的系统状态机，不是 Kubernetes 官方只针对单个 Pod 定义的 `status.phase` 状态机：
 
@@ -210,10 +211,14 @@ stateDiagram-v2
     phase：Pending
     container state：Waiting
     reason：ContainerCreating" as Preparing
-    state "Pod：运行中
+    state "Pod：启动检查中
     phase：Running
     container state：Running
-    Ready：False" as Running
+    Ready：False" as Starting
+    state "Pod：探测运行中
+    phase：Running
+    container state：Running
+    Ready：False" as Probing
     state "Pod：可接收工作
     phase：Running
     container state：Running
@@ -224,6 +229,10 @@ stateDiagram-v2
     state "Pod：失败
     phase：Failed
     container state：Terminated" as Failed
+    state "容器：等待重启
+    phase：Running
+    container state：Waiting
+    reason：CrashLoopBackOff" as Restarting
 
     YAML --> JobStored: kubectl -> API Server<br/>认证 授权 Admission 校验<br/>API Server 写入 etcd
     JobStored --> PodUnbound: Job Controller Watch 到 Job<br/>创建四个实际 Pod 对象<br/>API Server 写入 etcd
@@ -231,18 +240,49 @@ stateDiagram-v2
     PodUnbound --> PodUnbound: 暂无可行 Node<br/>保持 Pending 等待重试
     PodBound --> Preparing: 目标 Node 的 kubelet Watch 到 Pod<br/>开始本机准备
     Preparing --> Preparing: 拉镜像 挂载 Volume<br/>配置 CNI 分配设备或重试
-    Preparing --> Running: kubelet通过 CRI 调用 containerd<br/>创建 Sandbox 和容器进程<br/>写回 Pod status
-    Running --> Ready: readiness probe 通过
-    Ready --> Running: readiness probe 失败<br/>容器仍然运行但暂不接流量
-    Running --> Succeeded: 主进程退出码为 0<br/>且不再重启
+    Preparing --> Starting: kubelet通过 CRI 调用 containerd<br/>创建 Sandbox 和容器进程<br/>开始执行 startup probe
+    Starting --> Starting: startup probe 尚未通过<br/>readiness 和 liveness 均不执行
+    Starting --> Probing: startup probe 成功或未配置<br/>同时启用 readiness 和 liveness
+    Probing --> Ready: readiness probe 通过<br/>或未配置 readiness
+    Ready --> Probing: readiness probe 失败<br/>容器仍然运行但暂不接流量
+    Probing --> Restarting: liveness probe 连续失败<br/>与 readiness 结果无关<br/>kubelet杀死容器
+    Ready --> Restarting: liveness probe 连续失败<br/>kubelet杀死容器<br/>restartPolicy 允许重启
+    Starting --> Restarting: startup probe 连续失败<br/>kubelet杀死容器<br/>restartPolicy 允许重启
+    Restarting --> Starting: kubelet按退避策略重启容器
+    Restarting --> Failed: 超过任务重试策略
+    Starting --> Succeeded: 主进程退出码为 0<br/>且不再重启
+    Probing --> Succeeded: 主进程退出码为 0<br/>且不再重启
     Ready --> Succeeded: 工作完成且正常退出
-    Running --> Failed: 启动或运行失败<br/>超过重启或 Job 重试策略
+    Starting --> Failed: 启动失败<br/>restartPolicy 为 Never<br/>或超过 Job 重试策略
+    Probing --> Failed: 运行失败<br/>restartPolicy 为 Never<br/>或超过 Job 重试策略
     Ready --> Failed: 运行期间发生不可恢复错误
     Succeeded --> [*]
     Failed --> [*]
 ```
 
 读图时注意：转移边上的组件负责推动变化，状态框描述 API Server 中可以观察到的对象状态。API Server 负责校验、持久化和发布 Watch 事件，但不替 Controller、Scheduler 或 kubelet做决策。
+
+### startup、readiness 和 liveness probe 在哪一步
+
+三种 probe 都发生在 Scheduler 完成绑定、kubelet已经通过 containerd 启动容器之后。它们是 kubelet的本机检查，不是 Controller 的 Reconcile，也不由 API Server 主动执行。
+
+| Probe | 什么时候执行 | 失败后的效果 | 是否重启容器 |
+| --- | --- | --- | --- |
+| startup | 容器启动后；配置时会暂时屏蔽 readiness 和 liveness | 达到失败阈值后，kubelet杀死容器 | 取决于 `restartPolicy` |
+| readiness | startup 成功或未配置 startup 后，周期执行 | `Ready=False`，Service Endpoint 不再把流量发给该 Pod | 不重启 |
+| liveness | startup 成功或未配置 startup 后，周期执行 | 达到失败阈值后，kubelet杀死容器 | 取决于 `restartPolicy` |
+
+因此不存在“先 readiness 还是先 liveness”：如果配置了 startup，必须先等 startup 成功；之后 readiness 和 liveness 独立地按各自的 `initialDelaySeconds`、`periodSeconds`、`timeoutSeconds` 与阈值运行。liveness 不等待 readiness 成功。
+
+readiness 回答“现在能不能接流量”，liveness 回答“进程是否已经坏到应该重启”。一个容器可以处于 `Running` 且 `Ready=False`，同时继续接受 liveness 检查；liveness 失败也不会把 Pod 送回 Scheduler，Pod 仍绑定在原 Node 上，由该 Node 的 kubelet处理容器重启。
+
+本项目生成的 Worker Pod 使用：
+
+```yaml
+restartPolicy: Never
+```
+
+因此如果以后给 Worker 加 liveness probe，探测达到失败阈值后 kubelet会杀死容器，但不会在同一个 Pod 内重启它。容器以失败状态终止后，Pod 通常进入 `Failed`；随后是否创建新 Pod 由 Job 的重试策略决定。本项目同时设置 `backoffLimit: 0`，因此教学示例不会自动重试失败 Worker。
 
 这里需要区分三个概念：
 
