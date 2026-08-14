@@ -17,6 +17,8 @@ type AIJobSpec struct {
 	Topology string `json:"topology,omitempty"`
 	// Image is the training image executed by every worker.
 	Image string `json:"image,omitempty"`
+	// Args is the ordered argument list passed to every worker container.
+	Args []string `json:"args,omitempty"`
 }
 
 // AIJobStatus summarizes the JobSet observed by the controller.
@@ -46,6 +48,9 @@ type AIJobList struct {
 func (in *AIJob) DeepCopyInto(out *AIJob) {
 	*out = *in
 	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	if in.Spec.Args != nil {
+		out.Spec.Args = append([]string(nil), in.Spec.Args...)
+	}
 	if in.Status.Conditions != nil {
 		out.Status.Conditions = make([]metav1.Condition, len(in.Status.Conditions))
 		copy(out.Status.Conditions, in.Status.Conditions)

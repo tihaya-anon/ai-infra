@@ -26,12 +26,8 @@
 | Prometheus、Grafana、SLO、负载测试 | 可观测性、容量评估与可靠性治理 |
 | Go、Java、Python | Controller、Scheduler 和平台服务开发基础 |
 
-相关材料：
-
-- [中文简历](resume_zh.json)
-- [简历补充素材](supplement.md)
-- [实习日报](material/log/)
-- [Lambda 架构图](arch.md)
+仓库中可直接核对的背景材料是[中文简历](resume_zh.json)与[目标岗位描述](jd.txt)。学习路线不再
+链接未纳入仓库的个人笔记，避免读者在实践中进入断链。
 
 ## 主要知识缺口
 
@@ -266,7 +262,7 @@ Agent 除模型请求外，还可能临时启动代码沙箱、工具容器或�
 
 使用 Go 开发一个 Kubernetes `AIJob` Operator，将现有平台工程经验迁移到 AI 场景。
 
-### API 草案
+### 当前 API
 
 ```yaml
 apiVersion: infra.example.io/v1alpha1
@@ -277,21 +273,32 @@ spec:
   workers: 4
   gpuPerWorker: 2
   topology: same-rack
-  gangScheduling: true
-  checkpoint:
-    path: s3://checkpoints/demo-training
+  image: ai-infra-lab:dev
+  args: ["--mode=complete", "--duration=5s"]
 ```
 
 ### 迭代计划
 
-1. 定义 CRD，由 Controller 创建 Worker Jobs；
-2. 聚合作业状态，实现失败重试和清理；
-3. 增加 Queue、Priority 和 GPU Quota；
-4. 实现 Gang 最小资源检查；
-5. 基于 Node Label 模拟 GPU 拓扑并实现调度打分；
-6. 暴露队列等待、调度失败和资源利用率指标；
-7. 增加 Checkpoint 恢复、镜像预拉取与模型缓存预热；
-8. 编写负载测试、故障测试和容量报告。
+已完成的教学闭环是：AIJob 到 JobSet 的薄转换、Kueue queue/quota/TAS、Node 级拓扑打分、
+确定性 Worker、组件指标、unit/envtest/kind 三层验证、碎片对照实验和 run-scoped failure evidence。
+
+下一阶段应在不混淆边界的前提下继续：Checkpoint 恢复、镜像预拉取、模型缓存预热、真实 DRA
+设备选择，以及真实 GPU 上的训练/通信 benchmark。它们必须有各自的 measured evidence，不能从
+本仓库的模拟扩展资源结果外推。
+
+### 当前项目的独立验收路径
+
+不要只运行最终 demo。每一层回答的问题不同，也可以独立重跑：
+
+| 层次 | 命令 | 验收问题 |
+| --- | --- | --- |
+| 纯逻辑 | `make verify` | 参数、转换、指标标签和碎片公式是否稳定 |
+| API 控制循环 | `make test-api` | 真实 API Server 下 Reconcile 是否幂等、status 是否正确 |
+| 部署链路 | `make test-e2e CLUSTER=ai-infra-lab-v134` | JobSet/Kueue/Scheduler/Worker/GC 是否接力 |
+| 调度实验 | `make benchmark CLUSTER=ai-infra-lab-v134` | profile 是否改变可观察的碎片与 probe outcome |
+| 故障诊断 | `make failure-worker CLUSTER=ai-infra-lab-v134` 等 | 能否从对象、事件、日志和指标定位阶段 |
+
+完成一层的标准不是“命令跑过”，而是能解释输入、预期 condition、原始证据和不属于该层的结论。
 
 没有真实 GPU 时，可以通过 Node Label 和测试用扩展资源模拟节点拓扑。项目重点是控制器、调度决策、资源状态和可靠性，而不是训练模型本身。
 

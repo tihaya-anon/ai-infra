@@ -3,11 +3,13 @@ package controller
 import (
 	"context"
 	"reflect"
+	"time"
 
 	aiv1alpha1 "github.com/tihaya-anon/ai-infra-lab/api/v1alpha1"
 	"github.com/tihaya-anon/ai-infra-lab/internal/topology"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -26,7 +28,8 @@ var _ reconcile.Reconciler = &AIJobReconciler{}
 // AIJobReconciler adapts the AIJob API to the standard JobSet API.
 type AIJobReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme  *runtime.Scheme
+	Metrics *Metrics
 }
 
 // Reconcile converges one AIJob-owned JobSet and derives the public status.
@@ -34,22 +37,42 @@ func (r *AIJobReconciler) Reconcile(
 	ctx context.Context,
 	request ctrl.Request,
 ) (ctrl.Result, error) {
+	started := time.Now()
+	result := "success"
+	defer func() { r.Metrics.observe(started, result) }()
+
 	job := &aiv1alpha1.AIJob{}
 	if err := r.Get(ctx, request.NamespacedName, job); err != nil {
+		if apierrors.IsNotFound(err) {
+			result = "not_found"
+		} else {
+			result = "error"
+			r.Metrics.recordError("get")
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	jobSet, err := r.reconcileJobSet(ctx, job)
+	jobSet, operation, err := r.reconcileJobSet(ctx, job)
 	if err != nil {
+		result = "error"
+		r.Metrics.recordError("jobset")
 		return ctrl.Result{}, err
 	}
-	return ctrl.Result{}, r.reconcileStatus(ctx, job, jobSet)
+	r.Metrics.recordJobSetChange(operation)
+	changed, err := r.reconcileStatus(ctx, job, jobSet)
+	if err != nil {
+		result = "error"
+		r.Metrics.recordError("status")
+		return ctrl.Result{}, err
+	}
+	r.Metrics.recordStatusChange(changed)
+	return ctrl.Result{}, nil
 }
 
 func (r *AIJobReconciler) reconcileJobSet(
 	ctx context.Context,
 	job *aiv1alpha1.AIJob,
-) (*jobsetv1alpha2.JobSet, error) {
+) (*jobsetv1alpha2.JobSet, string, error) {
 	desired := desiredJobSet(job)
 	jobSet := &jobsetv1alpha2.JobSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -58,7 +81,7 @@ func (r *AIJobReconciler) reconcileJobSet(
 		},
 	}
 
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, jobSet, func() error {
+	operation, err := controllerutil.CreateOrUpdate(ctx, r.Client, jobSet, func() error {
 		if err := ctrl.SetControllerReference(job, jobSet, r.Scheme); err != nil {
 			return err
 		}
@@ -66,20 +89,32 @@ func (r *AIJobReconciler) reconcileJobSet(
 		// Kueue owns spec.suspend after admission; do not overwrite it here.
 		return nil
 	})
-	return jobSet, err
+	return jobSet, operationLabel(operation), err
 }
 
 func (r *AIJobReconciler) reconcileStatus(
 	ctx context.Context,
 	job *aiv1alpha1.AIJob,
 	jobSet *jobsetv1alpha2.JobSet,
-) error {
+) (bool, error) {
 	status := statusFromJobSet(job.Generation, jobSet)
 	if reflect.DeepEqual(job.Status, status) {
-		return nil
+		return false, nil
 	}
 	job.Status = status
-	return r.Status().Update(ctx, job)
+	return true, r.Status().Update(ctx, job)
+}
+
+func operationLabel(operation controllerutil.OperationResult) string {
+	switch operation {
+	case controllerutil.OperationResultCreated:
+		return "create"
+	case controllerutil.OperationResultUpdated, controllerutil.OperationResultUpdatedStatus,
+		controllerutil.OperationResultUpdatedStatusOnly:
+		return "update"
+	default:
+		return "unchanged"
+	}
 }
 
 // SetupWithManager maps owned JobSet changes back to their AIJob.
@@ -91,7 +126,8 @@ func (r *AIJobReconciler) SetupWithManager(manager ctrl.Manager) error {
 }
 
 func desiredJobSet(job *aiv1alpha1.AIJob) *jobsetv1alpha2.JobSet {
-	labels := map[string]string{topology.JobLabel: job.Name}
+	labels := topology.LabLabels(job.Labels)
+	labels[topology.JobLabel] = job.Name
 	if queue := job.Labels[topology.QueueLabel]; queue != "" {
 		labels[topology.QueueLabel] = queue
 	}
@@ -103,7 +139,10 @@ func desiredJobSet(job *aiv1alpha1.AIJob) *jobsetv1alpha2.JobSet {
 			ReplicatedJobs: []jobsetv1alpha2.ReplicatedJob{{
 				Name:     "workers",
 				Replicas: 1,
-				Template: batchv1.JobTemplateSpec{Spec: workerJobSpec(job)},
+				Template: batchv1.JobTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: topology.LabLabels(job.Labels)},
+					Spec:       workerJobSpec(job),
+				},
 			}},
 		},
 	}
@@ -116,6 +155,13 @@ func reconcileOwnedFields(actual, desired *jobsetv1alpha2.JobSet) {
 		actual.Labels = make(map[string]string, 2)
 	}
 	actual.Labels[topology.JobLabel] = desired.Labels[topology.JobLabel]
+	for _, key := range []string{topology.RunIDLabel, topology.ExperimentLabel} {
+		if value := desired.Labels[key]; value != "" {
+			actual.Labels[key] = value
+		} else {
+			delete(actual.Labels, key)
+		}
+	}
 	if queue := desired.Labels[topology.QueueLabel]; queue != "" {
 		actual.Labels[topology.QueueLabel] = queue
 	} else {
@@ -131,6 +177,8 @@ func reconcileOwnedFields(actual, desired *jobsetv1alpha2.JobSet) {
 func workerJobSpec(job *aiv1alpha1.AIJob) batchv1.JobSpec {
 	workers := job.Spec.Workers
 	backoffLimit := int32(0)
+	labels := topology.LabLabels(job.Labels)
+	labels[topology.JobLabel] = job.Name
 	return batchv1.JobSpec{
 		Parallelism:    &workers,
 		Completions:    &workers,
@@ -138,7 +186,7 @@ func workerJobSpec(job *aiv1alpha1.AIJob) batchv1.JobSpec {
 		BackoffLimit:   &backoffLimit,
 		Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{
-				Labels:      map[string]string{topology.JobLabel: job.Name},
+				Labels:      labels,
 				Annotations: schedulingAnnotations(job.Spec.Topology),
 			},
 			Spec: corev1.PodSpec{
@@ -166,7 +214,14 @@ func workerContainer(job *aiv1alpha1.AIJob) corev1.Container {
 		Image:           image,
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Command:         []string{"/worker"},
-		Resources:       corev1.ResourceRequirements{Requests: resources, Limits: resources},
+		Args:            append([]string(nil), job.Spec.Args...),
+		Env: []corev1.EnvVar{{
+			Name: "JOB_COMPLETION_INDEX",
+			ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{
+				FieldPath: "metadata.labels['batch.kubernetes.io/job-completion-index']",
+			}},
+		}},
+		Resources: corev1.ResourceRequirements{Requests: resources, Limits: resources},
 	}
 }
 

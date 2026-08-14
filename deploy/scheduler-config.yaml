@@ -40,7 +40,12 @@ spec:
           image: ai-infra-lab:dev
           imagePullPolicy: IfNotPresent
           command: ["/scheduler"]
-          args: ["--config=/etc/kubernetes/config.yaml"]
+          args:
+            - --config=/etc/kubernetes/config.yaml
+            - --bind-address=0.0.0.0
+          ports:
+            - name: metrics
+              containerPort: 10259
           volumeMounts:
             - name: config
               mountPath: /etc/kubernetes
@@ -49,3 +54,16 @@ spec:
         - name: config
           configMap:
             name: ai-scheduler-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-scheduler-metrics
+  namespace: ai-infra-system
+spec:
+  selector:
+    app: ai-scheduler
+  ports:
+    - name: https-metrics
+      port: 10259
+      targetPort: metrics

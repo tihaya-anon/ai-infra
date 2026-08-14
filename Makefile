@@ -4,8 +4,9 @@ RUNTIME_IMAGE ?= m.daocloud.io/gcr.io/distroless/static-debian12:nonroot
 JOBSET_VERSION ?= v0.10.1
 KUEUE_VERSION ?= v0.14.3
 GOIMPORTS := ./scripts/goimports.sh
+ENVTEST_K8S_VERSION ?= 1.34.0
 
-.PHONY: tools fmt fmt-check line-length vet test verify hooks build image cluster deploy demo clean
+.PHONY: tools fmt fmt-check line-length vet test test-api test-e2e verify hooks build image cluster deploy demo benchmark benchmark-validate failure-capacity failure-worker failure-restart clean
 
 tools:
 	$(GOIMPORTS) --install
@@ -31,13 +32,21 @@ vet:
 test:
 	go test ./...
 
+test-api:
+	KUBEBUILDER_ASSETS="$$(./scripts/setup-envtest.sh $(ENVTEST_K8S_VERSION))" \
+	JOBSET_CRD_PATH="$$(go list -m -f '{{.Dir}}' sigs.k8s.io/jobset)/config/components/crd/bases/jobset.x-k8s.io_jobsets.yaml" \
+	go test -tags=api_test ./internal/controller -run '^TestAPIReconciliation$$' -count=1
+
+test-e2e:
+	go run ./cmd/labctl e2e --cluster $(CLUSTER)
+
 verify: fmt-check line-length vet test
 
 hooks: tools
 	pre-commit install
 
 build:
-	go build ./cmd/controller ./cmd/scheduler ./cmd/worker
+	go build ./cmd/controller ./cmd/scheduler ./cmd/worker ./cmd/labctl
 
 image:
 	docker build --build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) -t $(IMAGE) .
@@ -62,6 +71,21 @@ deploy: image
 demo:
 	./scripts/label-nodes.sh
 	kubectl apply -f examples/aijob.yaml
+
+benchmark:
+	go run ./cmd/labctl benchmark --cluster $(CLUSTER)
+
+benchmark-validate:
+	go run ./cmd/labctl validate-results --dir out/benchmark
+
+failure-capacity:
+	go run ./cmd/labctl exercise --cluster $(CLUSTER) --kind capacity
+
+failure-worker:
+	go run ./cmd/labctl exercise --cluster $(CLUSTER) --kind worker-failure
+
+failure-restart:
+	go run ./cmd/labctl exercise --cluster $(CLUSTER) --kind controller-restart
 
 clean:
 	kind delete cluster --name $(CLUSTER)

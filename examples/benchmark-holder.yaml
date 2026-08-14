@@ -1,0 +1,13 @@
+apiVersion: infra.example.io/v1alpha1
+kind: AIJob
+metadata:
+  name: benchmark-holder
+  labels:
+    kueue.x-k8s.io/queue-name: training
+spec:
+  workers: 1
+  gpuPerWorker: 2
+  gpuResource: example.com/gpu
+  topology: any
+  image: ai-infra-lab:dev
+  args: ["--mode=wait"]

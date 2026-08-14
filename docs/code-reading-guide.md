@@ -17,7 +17,8 @@ AIJob YAML
 
 ### 1. 从用户提交的对象开始
 
-1. [`examples/aijob.yaml`](../examples/aijob.yaml)：最小的业务输入。先记住 `workers`、`gpuPerWorker`、`topology` 和队列 Label，后续查它们分别被谁消费。
+1. [`examples/aijob.yaml`](../examples/aijob.yaml)：最小的业务输入。先记住 `workers`、
+   `gpuPerWorker`、`topology`、有序 `args` 和队列 Label，后续查它们分别被谁消费。
 2. [`deploy/crd.yaml`](../deploy/crd.yaml)：API Server 看到的 `AIJob` 契约，包括字段校验、默认值、不可变规则、status 子资源和打印列。
 3. [`api/v1alpha1/aijob_types.go`](../api/v1alpha1/aijob_types.go)：Controller 使用的 Go 类型，以及 Kubernetes runtime 所需的深拷贝实现。对照 CRD 阅读，可以区分服务端约束和进程内数据结构。
 4. [`api/v1alpha1/groupversion_info.go`](../api/v1alpha1/groupversion_info.go)：把 `AIJob`、`AIJobList` 注册到 `infra.example.io/v1alpha1` Scheme。
@@ -52,12 +53,29 @@ AIJob YAML
 
 ### 5. 最后补齐运行和部署边界
 
-1. [`cmd/worker/main.go`](../cmd/worker/main.go)：实验镜像中的占位训练进程，只等待终止信号；它不包含真实训练逻辑。
+1. [`cmd/worker/main.go`](../cmd/worker/main.go) 与
+   [`internal/worker/worker.go`](../internal/worker/worker.go)：从信号入口读到参数校验、complete/wait
+   状态机、indexed identity 和 NDJSON lifecycle 记录。
 2. [`Dockerfile`](../Dockerfile)：把 Controller、Scheduler 和 Worker 构建为三个二进制，并放入同一个运行时镜像。
 3. [`deploy/controller.yaml`](../deploy/controller.yaml) 与 [`deploy/rbac.yaml`](../deploy/rbac.yaml)：Controller 的启动命令、ServiceAccount，以及读写 AIJob/JobSet 所需的最小权限；RBAC 也包含自定义 Scheduler 的权限绑定。
 4. [`deploy/kueue-resources.yaml`](../deploy/kueue-resources.yaml)：实验使用的 Topology、ResourceFlavor、ClusterQueue 和 LocalQueue，它们承接 Controller 传下来的队列与跨节点拓扑意图。
 5. [`kind.yaml`](../kind.yaml) 与 [`scripts/label-nodes.sh`](../scripts/label-nodes.sh)：创建实验节点，并用 Label 和扩展资源模拟 rack、GPU fabric 与 GPU 容量。
 6. [`Makefile`](../Makefile)：把构建、建集群、部署依赖、提交样例和清理串成完整实验流程。最后读它，可以将前面的源码和清单映射到实际执行顺序。
+
+### 6. 沿实验结果反向阅读
+
+1. [`internal/lab/result.go`](../internal/lab/result.go)：先看版本化 JSON 合同，明确一次 measured
+   run 必须回答哪些问题。
+2. [`internal/lab/calculate.go`](../internal/lab/calculate.go)：核对 free GPU、Unschedulable 和
+   target-relative fragmentation 的纯计算。
+3. [`internal/lab/cluster.go`](../internal/lab/cluster.go)：查看 AIJob、JobSet、Kueue Workload、
+   Job、Pod、Node、Deployment、Event、log 与 metrics 如何被 typed client 发现和等待。
+4. [`internal/lab/benchmark.go`](../internal/lab/benchmark.go)：沿“切 profile -> 三个 holder -> capacity
+   snapshot -> probe -> partial result -> cleanup/restore”阅读主实验。
+5. [`internal/lab/evidence.go`](../internal/lab/evidence.go) 与
+   [`internal/lab/exercise.go`](../internal/lab/exercise.go)：理解失败时为何先收证据、后清理。
+6. [`cmd/labctl/main.go`](../cmd/labctl/main.go)：最后看 CLI 如何对所有会修改集群的命令应用
+   context guard、timeout 和输出目录。
 
 ## 按问题回查
 
@@ -70,3 +88,5 @@ AIJob YAML
 | 自定义调度器怎样找到并启用插件 | `cmd/scheduler/main.go`、`deploy/scheduler-config.yaml` |
 | 队列、配额和 rack 拓扑在哪里配置 | `deploy/kueue-resources.yaml` |
 | 本地实验如何模拟 GPU 节点 | `kind.yaml`、`scripts/label-nodes.sh` |
+| 为什么 baseline 和 optimized 可比较 | `deploy/scheduler-profiles/`、`benchmark_test.go` |
+| 失败后证据写到哪里、是否完整 | `evidence.go`、bundle 的 `manifest.json` |

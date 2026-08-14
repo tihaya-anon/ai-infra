@@ -21,6 +21,7 @@ spec:
   gpuResource: nvidia.com/gpu
   topology: nvlink
   image: registry.example.com/training:v1
+  args: ["--mode=complete", "--duration=30s"]
 ```
 
 字段表达业务意图：
@@ -30,6 +31,7 @@ spec:
 - `gpuResource`：Device Plugin 或 DRA 暴露的资源名；
 - `topology`：实验中的 `nvlink`、`pcie` 或 `same-rack`；
 - `image`：训练镜像；
+- `args`：按声明顺序原样传给 Worker 容器；省略时保持长驻等待的兼容行为；
 - `kueue.x-k8s.io/queue-name`：任务进入的 LocalQueue。
 
 业务方不创建 Pod，不指定某个 Node，也不负责在代码中调用 Controller 或 Scheduler。各组件通过 Kubernetes API 中的资源协作。
@@ -907,9 +909,9 @@ var _ framework.ScorePlugin = &Plugin{}
 Scheduler Framework 插件需要编译进 kube-scheduler 二进制：
 
 ```go
-command := app.NewSchedulerCommand(
-    app.WithPlugin(gputopology.Name, gputopology.New),
-)
+metrics := gputopology.NewMetrics(legacyregistry.Registerer())
+plugin := app.WithPlugin(gputopology.Name, gputopology.NewFactory(metrics))
+command := app.NewSchedulerCommand(plugin)
 ```
 
 Scheduler profile 再启用对应扩展点：
@@ -917,15 +919,15 @@ Scheduler profile 再启用对应扩展点：
 ```yaml
 profiles:
   - schedulerName: ai-scheduler
-    plugins:
-      preScore:
-        enabled:
-          - name: GPUTopology
-      score:
-        enabled:
-          - name: GPUTopology
-            weight: 5
+        plugins:
+          score:
+            enabled:
+              - name: GPUTopology
+                weight: 5
 ```
+
+`GPUTopology` 只实现 `ScorePlugin`，因此只能在 `score` 扩展点启用。把它同时写进
+`preScore` 会要求插件实现另一个接口，Scheduler 会在启动时拒绝这份配置。
 
 这个实验额外运行一个 `ai-scheduler`，不替换 kind 自带的 `default-scheduler`。JobSet 创建的 Worker Pod 通过 PodTemplate 中的 `schedulerName` 使用它。
 
@@ -1016,6 +1018,76 @@ kubectl get workloads.kueue.x-k8s.io
 kubectl get jobs,pods -l infra.example.io/aijob=demo-training -o wide
 ```
 
+### 先把 Worker 当成一台可控的实验仪器
+
+真实训练框架会引入模型、数据、通信和硬件故障，很难判断控制面实验究竟在哪里失败。仓库中的
+Worker 故意只模拟生命周期，并用每行一个 JSON 的方式打印 `start` 和 `result` 记录。
+
+| 参数 | 现象 | 适合验证 |
+| --- | --- | --- |
+| `--mode=complete --duration=5s` | 等待后成功退出 | 正常完成与 status 投影 |
+| `--mode=complete --fail-indexes=1` | index 1 稳定非零退出 | 局部 Worker 失败传播 |
+| `--startup-delay=3s` | 延迟进入工作阶段 | 启动时序 |
+| `--mode=wait` 或省略参数 | 一直占用资源，直到收到终止信号 | benchmark holder |
+
+Indexed Job 会通过 downward API 把
+`batch.kubernetes.io/job-completion-index` 注入 `JOB_COMPLETION_INDEX`。直接在终端运行 Worker
+时没有这个变量也不会崩溃，记录中的 `completionIndex` 会省略。
+
+### 不安装 Prometheus 也能读指标
+
+先在一个终端转发 Controller 的 HTTP Service：
+
+```bash
+kubectl -n ai-infra-system port-forward service/aijob-controller-metrics 8080:8080
+curl http://127.0.0.1:8080/metrics | grep '^aijob_controller_'
+```
+
+Scheduler 保留 kube-scheduler 的鉴权 HTTPS 端点。创建短期 ServiceAccount token，再通过
+Service 转发读取；`-k` 只用于接受本地实验中临时生成的服务证书：
+
+```bash
+kubectl -n ai-infra-system port-forward service/ai-scheduler-metrics 10259:10259
+TOKEN="$(kubectl -n ai-infra-system create token ai-scheduler)"
+curl -k -H "Authorization: Bearer ${TOKEN}" \
+  https://127.0.0.1:10259/metrics | grep '^aijob_scheduler_'
+```
+
+标签只包含 `success/error/not_found`、`nvlink/pcie/other` 等有限类别。对象名称只出现在日志和
+证据 YAML，不进入 metric label。
+
+### 三层验证分别证明什么
+
+```bash
+make verify
+make test-api
+make test-e2e CLUSTER=ai-infra-lab-v134
+```
+
+第一层验证 API 序列化、Controller 转换、Worker 状态机、指标标签和碎片计算，不需要 Docker；
+第二层用 envtest 的真实 API Server 验证创建、status 子资源和重复 Reconcile，但不声称验证
+垃圾回收；第三层要求显式 kind context，验证部署后的完整链路、失败传播、Controller 替换与
+owner-based cleanup。E2E 超时时会先在 `out/e2e/` 留下证据，再返回非零。
+
+### 按“停在哪一层”诊断失败
+
+| 现象 | 先看对象 | 再看证据 |
+| --- | --- | --- |
+| 配额或容量不足 | Workload 的 Admitted/QuotaReserved、PodScheduled | Kueue/Scheduler events 与 metrics |
+| 指定 Worker 失败 | Pod exit code、Job Failed、JobSet/AIJob Conditions | Worker JSON log 与 Controller metrics |
+| Controller 被替换 | Deployment/Pod UID、owned JobSet 数量 | 新旧 Controller log 与 reconcile counter |
+
+三条可重复演练分别是：
+
+```bash
+make failure-capacity CLUSTER=ai-infra-lab-v134
+make failure-worker CLUSTER=ai-infra-lab-v134
+make failure-restart CLUSTER=ai-infra-lab-v134
+```
+
+每个命令只清理由自身 run ID 标记的 AIJob。证据目录中的 `manifest.json` 会列出 expected、
+observed、文件索引和 completeness；即使超时，已有对象与日志仍会保留。
+
 ### 常见问题
 
 如果 kind 节点日志出现 `Failed to create control group inotify object: Too many open files`，检查 WSL 的 inotify instance 上限：
@@ -1035,7 +1107,21 @@ sudo sysctl -w fs.inotify.max_user_instances=1024
 make clean CLUSTER=ai-infra-lab-v134
 ```
 
-## 十、什么时候才写自定义扩展
+## 十、用对照实验观察资源碎片
+
+现在可以把问题从“Pod 能否运行”提升为“不同 NodeResourcesFit 策略产生什么可观察差异”。
+完整步骤、指标公式和报告方法见[调度实验指南](scheduling-experiment.md)。最短入口是：
+
+```bash
+make benchmark CLUSTER=ai-infra-lab-v134
+```
+
+runner 会顺序运行 `LeastAllocated` baseline 与 `MostAllocated` optimized profile，每次提交三个
+2-GPU holder，再提交一个 4-GPU probe。它会恢复原 Scheduler 配置，并为每个 profile/repetition
+写一份 schema-versioned JSON。模拟 GPU 只能证明调度与资源记账行为，不能推导真实 GPU 利用率、
+NVLink 带宽或训练吞吐。
+
+## 十一、什么时候才写自定义扩展
 
 优先复用已有能力：
 
@@ -1051,7 +1137,7 @@ make clean CLUSTER=ai-infra-lab-v134
 
 扩展 Kubernetes 的核心不是尽可能多写 Controller 和 Scheduler，而是在正确的层只补齐标准组件没有表达的领域语义。
 
-## 十一、进一步阅读
+## 十二、进一步阅读
 
 - [Kubernetes Controller](https://kubernetes.io/docs/concepts/architecture/controller/)
 - [JobSet](https://jobset.sigs.k8s.io/docs/overview/)

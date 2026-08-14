@@ -1,0 +1,13 @@
+apiVersion: infra.example.io/v1alpha1
+kind: AIJob
+metadata:
+  name: selected-worker-failure
+  labels:
+    kueue.x-k8s.io/queue-name: training
+spec:
+  workers: 4
+  gpuPerWorker: 1
+  gpuResource: example.com/gpu
+  topology: any
+  image: ai-infra-lab:dev
+  args: ["--mode=complete", "--duration=2s", "--fail-indexes=1"]

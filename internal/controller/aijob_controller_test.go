@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"reflect"
 	"testing"
 
 	aiv1alpha1 "github.com/tihaya-anon/ai-infra-lab/api/v1alpha1"
@@ -11,7 +12,10 @@ import (
 
 func TestDesiredJobSetCarriesSchedulingIntent(t *testing.T) {
 	job := testAIJob("nvlink")
-	job.Labels = map[string]string{topology.QueueLabel: "training"}
+	job.Labels = map[string]string{
+		topology.QueueLabel: "training", topology.RunIDLabel: "run-1",
+		topology.ExperimentLabel: "benchmark",
+	}
 
 	jobSet := desiredJobSet(job)
 	worker := jobSet.Spec.ReplicatedJobs[0].Template.Spec
@@ -31,6 +35,41 @@ func TestDesiredJobSetCarriesSchedulingIntent(t *testing.T) {
 	}
 	if got := pod.Spec.Containers[0].Resources.Limits["nvidia.com/gpu"]; got.Value() != 2 {
 		t.Fatalf("got GPU limit %s, want 2", got.String())
+	}
+	if jobSet.Labels[topology.RunIDLabel] != "run-1" ||
+		pod.Labels[topology.ExperimentLabel] != "benchmark" {
+		t.Fatalf("lab labels were not propagated: JobSet=%#v Pod=%#v", jobSet.Labels, pod.Labels)
+	}
+}
+
+func TestWorkerArgumentsAndCompletionIdentity(t *testing.T) {
+	job := testAIJob("any")
+	job.Spec.Args = []string{"--mode=complete", "--duration=2s", "--fail-indexes=1,3"}
+
+	container := workerContainer(job)
+	wantArgs := []string{"--mode=complete", "--duration=2s", "--fail-indexes=1,3"}
+	if !reflect.DeepEqual(container.Args, wantArgs) {
+		t.Fatalf("got args %#v, want %#v", container.Args, wantArgs)
+	}
+	if len(container.Env) != 1 || container.Env[0].Name != "JOB_COMPLETION_INDEX" {
+		t.Fatalf("unexpected completion identity env: %#v", container.Env)
+	}
+	fieldRef := container.Env[0].ValueFrom.FieldRef
+	if fieldRef == nil || fieldRef.FieldPath !=
+		"metadata.labels['batch.kubernetes.io/job-completion-index']" {
+		t.Fatalf("unexpected completion identity field ref: %#v", fieldRef)
+	}
+
+	container.Args[0] = "changed"
+	if job.Spec.Args[0] != "--mode=complete" {
+		t.Fatal("worker container shares the AIJob args backing array")
+	}
+}
+
+func TestWorkerArgumentsRemainOmitted(t *testing.T) {
+	container := workerContainer(testAIJob("any"))
+	if container.Args != nil {
+		t.Fatalf("got args %#v, want nil", container.Args)
 	}
 }
 
