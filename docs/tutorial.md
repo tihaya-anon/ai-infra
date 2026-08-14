@@ -978,15 +978,19 @@ flowchart TD
 
 ### 镜像源
 
-构建阶段包含两个来源：
+构建阶段包含三个外部来源：
 
-- `golang:1.24.0` 来自 Docker Hub，可以使用 Docker daemon 的 `registry-mirrors` 加速；
-- distroless 原始镜像位于 `gcr.io`，Docker Hub mirror 不会代理它。
+- builder 镜像原始来源是 Docker Hub 的 `golang:1.24.0`；
+- distroless 原始镜像位于 `gcr.io`，Docker Hub mirror 不会代理它；
+- Go 模块默认从 `GOPROXY` 下载。
 
-本项目默认通过 `m.daocloud.io` 获取 distroless。该地址是用于本地实验的第三方代理；生产构建应使用组织自己的可信镜像仓库，并按 digest 固定基础镜像。切回官方地址：
+本项目默认通过 `m.daocloud.io` 获取 builder 和 distroless 镜像，并通过 `goproxy.cn` 下载 Go 模块。这些地址用于本地实验；生产构建应使用组织自己的可信镜像仓库，并按 digest 固定基础镜像。切回官方地址：
 
 ```bash
-make image RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
+make image \
+  GO_BUILDER_IMAGE=golang:1.24.0 \
+  GOPROXY=https://proxy.golang.org,direct \
+  RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
 ```
 
 `make deploy` 还会从 GitHub Release 安装 JobSet 和 Kueue 清单，这部分也不经过 Docker Hub mirror。
@@ -1099,7 +1103,7 @@ sudo sysctl -w fs.inotify.max_user_instances=1024
 
 这是宿主机 inotify instance 耗尽，不是节点镜像损坏。第二条只修改当前运行时；需要永久保留时，应通过 WSL 的系统配置管理，而不是写入项目脚本。
 
-如果基础镜像报 DNS 或超时错误，先根据错误中的 registry 判断来源。`docker.io` 可以检查 daemon mirror，`gcr.io` 则应检查 `RUNTIME_IMAGE` 是否使用可访问的显式代理地址。
+如果基础镜像报 DNS 或超时错误，先根据错误中的 registry 判断来源。默认值已经走代理；仍失败时，`docker.io` 可以检查 daemon mirror，或通过 `GO_BUILDER_IMAGE` 指定另一个可访问地址；`gcr.io` 则应检查 `RUNTIME_IMAGE` 是否使用可访问的显式代理地址。进入 `go mod download` 后卡住时，通过 `GOPROXY` 指定另一个可访问的 Go 模块代理。
 
 删除实验环境：
 

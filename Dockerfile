@@ -1,6 +1,9 @@
 ARG RUNTIME_IMAGE=m.daocloud.io/gcr.io/distroless/static-debian12:nonroot
+ARG GO_BUILDER_IMAGE=m.daocloud.io/docker.io/library/golang:1.24.0
 
-FROM golang:1.24.0 AS builder
+FROM ${GO_BUILDER_IMAGE} AS builder
+ARG GOPROXY=https://goproxy.cn,direct
+ENV GOPROXY=${GOPROXY}
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

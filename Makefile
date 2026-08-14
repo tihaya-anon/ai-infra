@@ -1,5 +1,7 @@
 CLUSTER ?= ai-infra-lab
 IMAGE ?= ai-infra-lab:dev
+GO_BUILDER_IMAGE ?= m.daocloud.io/docker.io/library/golang:1.24.0
+GOPROXY ?= https://goproxy.cn,direct
 RUNTIME_IMAGE ?= m.daocloud.io/gcr.io/distroless/static-debian12:nonroot
 JOBSET_VERSION ?= v0.10.1
 KUEUE_VERSION ?= v0.14.3
@@ -49,7 +51,7 @@ build:
 	go build ./cmd/controller ./cmd/scheduler ./cmd/worker ./cmd/labctl
 
 image:
-	docker build --build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) -t $(IMAGE) .
+	docker build --build-arg GO_BUILDER_IMAGE=$(GO_BUILDER_IMAGE) --build-arg GOPROXY=$(GOPROXY) --build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) -t $(IMAGE) .
 
 cluster:
 	kind create cluster --name $(CLUSTER) --config kind.yaml

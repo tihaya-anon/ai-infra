@@ -30,10 +30,9 @@ make benchmark CLUSTER=ai-infra-lab-v134
 部署后的 JobSet、Kueue、Scheduler、Worker 与垃圾回收。benchmark 结果默认写入忽略版本控制的
 `out/benchmark/`，没有真实执行就不应在报告中填写 measured 数据。
 
-实验固定使用 Kubernetes 1.34.8。构建默认通过 DaoCloud 代理获取 `gcr.io` 的 distroless
-基础镜像；切回官方源可传入
-`RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot`。完整的环境要求、组件职责和排错方式
-见教程。
+实验固定使用 Kubernetes 1.34.8。构建默认通过 DaoCloud 代理获取 builder 和 distroless
+基础镜像，并通过 `goproxy.cn` 下载 Go 模块；切回官方源可覆盖 `GO_BUILDER_IMAGE`、
+`GOPROXY` 和 `RUNTIME_IMAGE`。完整的环境要求、组件职责和排错方式见教程。
 
 开发时运行 `make fmt` 格式化并整理 Go import，运行 `make verify` 检查格式、100 字符行宽、`go vet` 和测试。首次克隆后运行 `make hooks` 安装相同的 pre-commit 流程；提交涉及 Go 源码或模块文件时会自动执行。
 
