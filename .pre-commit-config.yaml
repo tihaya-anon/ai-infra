@@ -1,0 +1,28 @@
+minimum_pre_commit_version: "3.0.0"
+
+repos:
+  - repo: local
+    hooks:
+      - id: goimports
+        name: Format Go files
+        entry: ./scripts/goimports.sh -w
+        language: system
+        types: [go]
+        require_serial: true
+      - id: go-line-length
+        name: Check Go line length
+        entry: ./scripts/check-go-line-length.sh
+        language: system
+        types: [go]
+      - id: go-vet
+        name: Vet Go packages
+        entry: go vet ./...
+        language: system
+        pass_filenames: false
+        files: (^|/)go\.(mod|sum)$|\.go$
+      - id: go-test
+        name: Test Go packages
+        entry: go test ./...
+        language: system
+        pass_filenames: false
+        files: (^|/)go\.(mod|sum)$|\.go$

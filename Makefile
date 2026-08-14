@@ -3,11 +3,38 @@ IMAGE ?= ai-infra-lab:dev
 RUNTIME_IMAGE ?= m.daocloud.io/gcr.io/distroless/static-debian12:nonroot
 JOBSET_VERSION ?= v0.10.1
 KUEUE_VERSION ?= v0.14.3
+GOIMPORTS := ./scripts/goimports.sh
 
-.PHONY: test build image cluster deploy demo clean
+.PHONY: tools fmt fmt-check line-length vet test verify hooks build image cluster deploy demo clean
+
+tools:
+	$(GOIMPORTS) --install
+
+fmt:
+	$(GOIMPORTS) -w .
+
+fmt-check:
+	@unformatted="$$( $(GOIMPORTS) -l . )" || exit $$?; \
+	if [ -n "$$unformatted" ]; then \
+		echo "Go files need formatting; run 'make fmt':"; \
+		echo "$$unformatted"; \
+		exit 1; \
+	fi
+
+line-length:
+	find . -type f -name '*.go' -not -path './.tools/*' \
+		-exec ./scripts/check-go-line-length.sh {} +
+
+vet:
+	go vet ./...
 
 test:
 	go test ./...
+
+verify: fmt-check line-length vet test
+
+hooks: tools
+	pre-commit install
 
 build:
 	go build ./cmd/controller ./cmd/scheduler ./cmd/worker

@@ -1,3 +1,4 @@
 /ai-infra-lab
+/.tools/
 *.test
 *.out

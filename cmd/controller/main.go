@@ -22,7 +22,10 @@ func main() {
 
 	manager, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{Scheme: scheme})
 	must(err)
-	must((&controller.AIJobReconciler{Client: manager.GetClient(), Scheme: scheme}).SetupWithManager(manager))
+	must((&controller.AIJobReconciler{
+		Client: manager.GetClient(),
+		Scheme: scheme,
+	}).SetupWithManager(manager))
 	must(manager.Start(ctrl.SetupSignalHandler()))
 }
 

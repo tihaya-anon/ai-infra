@@ -28,7 +28,12 @@ func New(_ context.Context, _ runtime.Object, _ framework.Handle) (framework.Plu
 func (p *Plugin) Name() string { return Name }
 
 // Score ranks a feasible Node without replacing kube-scheduler's default checks.
-func (p *Plugin) Score(_ context.Context, _ fwk.CycleState, pod *corev1.Pod, nodeInfo fwk.NodeInfo) (int64, *fwk.Status) {
+func (p *Plugin) Score(
+	_ context.Context,
+	_ fwk.CycleState,
+	pod *corev1.Pod,
+	nodeInfo fwk.NodeInfo,
+) (int64, *fwk.Status) {
 	node := nodeInfo.Node()
 	if node == nil {
 		return 0, fwk.NewStatus(fwk.Error, fmt.Sprintf("node not found in %s", nodeInfo.String()))

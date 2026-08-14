@@ -30,7 +30,10 @@ type AIJobReconciler struct {
 }
 
 // Reconcile converges one AIJob-owned JobSet and derives the public status.
-func (r *AIJobReconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.Result, error) {
+func (r *AIJobReconciler) Reconcile(
+	ctx context.Context,
+	request ctrl.Request,
+) (ctrl.Result, error) {
 	job := &aiv1alpha1.AIJob{}
 	if err := r.Get(ctx, request.NamespacedName, job); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -43,9 +46,17 @@ func (r *AIJobReconciler) Reconcile(ctx context.Context, request ctrl.Request) (
 	return ctrl.Result{}, r.reconcileStatus(ctx, job, jobSet)
 }
 
-func (r *AIJobReconciler) reconcileJobSet(ctx context.Context, job *aiv1alpha1.AIJob) (*jobsetv1alpha2.JobSet, error) {
+func (r *AIJobReconciler) reconcileJobSet(
+	ctx context.Context,
+	job *aiv1alpha1.AIJob,
+) (*jobsetv1alpha2.JobSet, error) {
 	desired := desiredJobSet(job)
-	jobSet := &jobsetv1alpha2.JobSet{ObjectMeta: metav1.ObjectMeta{Name: desired.Name, Namespace: desired.Namespace}}
+	jobSet := &jobsetv1alpha2.JobSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      desired.Name,
+			Namespace: desired.Namespace,
+		},
+	}
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, jobSet, func() error {
 		if err := ctrl.SetControllerReference(job, jobSet, r.Scheme); err != nil {
@@ -58,7 +69,11 @@ func (r *AIJobReconciler) reconcileJobSet(ctx context.Context, job *aiv1alpha1.A
 	return jobSet, err
 }
 
-func (r *AIJobReconciler) reconcileStatus(ctx context.Context, job *aiv1alpha1.AIJob, jobSet *jobsetv1alpha2.JobSet) error {
+func (r *AIJobReconciler) reconcileStatus(
+	ctx context.Context,
+	job *aiv1alpha1.AIJob,
+	jobSet *jobsetv1alpha2.JobSet,
+) error {
 	status := statusFromJobSet(job.Generation, jobSet)
 	if reflect.DeepEqual(job.Status, status) {
 		return nil

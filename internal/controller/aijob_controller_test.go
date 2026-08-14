@@ -78,7 +78,8 @@ func TestReconcileOwnedFieldsDoesNotOverwriteDefaultedSpec(t *testing.T) {
 
 	reconcileOwnedFields(actual, desired)
 
-	if actual.Spec.Network.PublishNotReadyAddresses == nil || !*actual.Spec.Network.PublishNotReadyAddresses {
+	if actual.Spec.Network.PublishNotReadyAddresses == nil ||
+		!*actual.Spec.Network.PublishNotReadyAddresses {
 		t.Fatal("webhook-defaulted network fields must be preserved after creation")
 	}
 	if actual.Spec.ReplicatedJobs != nil {

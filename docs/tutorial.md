@@ -823,36 +823,7 @@ metadata:
 
 ## 六、项目阅读顺序
 
-建议按业务声明到基础设施的方向阅读：
-
-```mermaid
-flowchart TD
-    Example[1 examples/aijob.yaml]
-    CRD[2 deploy/crd.yaml]
-    Types[3 api/v1alpha1]
-    Controller[4 internal/controller]
-    JobSetManifest[5 JobSet 与 Kueue 部署]
-    Plugin[6 internal/plugin/gputopology]
-    Register[7 cmd/scheduler/main.go]
-    Runtime[8 deploy scripts Makefile]
-
-    Example --> CRD
-    CRD --> Types
-    Types --> Controller
-    Controller --> JobSetManifest
-    JobSetManifest --> Plugin
-    Plugin --> Register
-    Register --> Runtime
-```
-
-1. `examples/aijob.yaml`：业务方声明的训练需求。
-2. `deploy/crd.yaml`：API Server 如何注册和校验 AIJob。
-3. `api/v1alpha1`：`AIJobSpec`、Conditions 和 Scheme 注册。
-4. `internal/controller/aijob_controller.go`：AIJob 如何被翻译成 JobSet。
-5. JobSet/Kueue manifest：通用任务生命周期、队列与拓扑如何接管。
-6. `internal/plugin/gputopology/plugin.go`：仍需自定义时，如何实现节点打分扩展点。
-7. `cmd/scheduler/main.go` 与 `deploy/scheduler-config.yaml`：插件如何注册和启用。
-8. `deploy/`、`scripts/` 与 `Makefile`：最后看安装、权限和本地实验。
+前文建立了理解源码所需的 Kubernetes、JobSet、Kueue 和 GPU 拓扑背景。实际跟读代码时，请转到[源码阅读指南](code-reading-guide.md)：它按 `AIJob` 从声明、Reconcile、调度到 Worker 的数据流列出文件和关键函数，并提供按问题回查的索引。本文后续章节继续解释设计目标和实现边界，不维护重复的文件目录。
 
 ## 七、AIJob Controller 的目标形态
 
