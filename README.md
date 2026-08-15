@@ -15,11 +15,13 @@
 运行实验：
 
 ```bash
+./scripts/install-dev-deps.sh
 make verify
 make test-api
 make cluster CLUSTER=ai-infra-lab-v134
 make deploy CLUSTER=ai-infra-lab-v134
 make demo
+make headlamp CLUSTER=ai-infra-lab-v134
 kubectl get aijob,pods -o wide
 make test-e2e CLUSTER=ai-infra-lab-v134
 make benchmark CLUSTER=ai-infra-lab-v134
@@ -30,9 +32,13 @@ make benchmark CLUSTER=ai-infra-lab-v134
 部署后的 JobSet、Kueue、Scheduler、Worker 与垃圾回收。benchmark 结果默认写入忽略版本控制的
 `out/benchmark/`，没有真实执行就不应在报告中填写 measured 数据。
 
-实验固定使用 Kubernetes 1.34.8。构建默认通过 DaoCloud 代理获取 builder 和 distroless
-基础镜像，并通过 `goproxy.cn` 下载 Go 模块；切回官方源可覆盖 `GO_BUILDER_IMAGE`、
-`GOPROXY` 和 `RUNTIME_IMAGE`。完整的环境要求、组件职责和排错方式见教程。
+`scripts/install-dev-deps.sh` 面向 Ubuntu/Debian Linux，安装 Go 1.24.0、kubectl 1.34.8、
+kind、Docker Engine、make、Bash、pre-commit 和项目本地 Go 工具。`make headlamp`
+会在当前 kind 集群中安装 Headlamp，并创建本地实验用的管理员 ServiceAccount。
+
+实验固定使用 Kubernetes 1.34.8。kind 节点镜像、builder 镜像和 distroless 基础镜像默认通过
+DaoCloud 代理获取，Go 模块默认通过 `goproxy.cn` 下载；切回官方源可覆盖 `KIND_NODE_IMAGE`、
+`GO_BUILDER_IMAGE`、`GOPROXY` 和 `RUNTIME_IMAGE`。完整的环境要求、组件职责和排错方式见教程。
 
 开发时运行 `make fmt` 格式化并整理 Go import，运行 `make verify` 检查格式、100 字符行宽、`go vet` 和测试。首次克隆后运行 `make hooks` 安装相同的 pre-commit 流程；提交涉及 Go 源码或模块文件时会自动执行。
 

@@ -1,14 +1,17 @@
 CLUSTER ?= ai-infra-lab
 IMAGE ?= ai-infra-lab:dev
+KIND_NODE_IMAGE ?= m.daocloud.io/docker.io/kindest/node:v1.34.8@sha256:02722c2dedddcfc00febf5d27fbeb9b7b2c14294c82109ff4a85d89ac9ba3256
 GO_BUILDER_IMAGE ?= m.daocloud.io/docker.io/library/golang:1.24.0
 GOPROXY ?= https://goproxy.cn,direct
 RUNTIME_IMAGE ?= m.daocloud.io/gcr.io/distroless/static-debian12:nonroot
+HEADLAMP_NAMESPACE ?= kube-system
+HEADLAMP_ADMIN_SERVICE_ACCOUNT ?= headlamp-admin
 JOBSET_VERSION ?= v0.10.1
 KUEUE_VERSION ?= v0.14.3
 GOIMPORTS := ./scripts/goimports.sh
 ENVTEST_K8S_VERSION ?= 1.34.0
 
-.PHONY: tools fmt fmt-check line-length vet test test-api test-e2e verify hooks build image cluster deploy demo benchmark benchmark-validate failure-capacity failure-worker failure-restart clean
+.PHONY: tools fmt fmt-check line-length vet test test-api test-e2e verify hooks build image cluster deploy demo headlamp headlamp-token headlamp-port-forward benchmark benchmark-validate failure-capacity failure-worker failure-restart clean
 
 tools:
 	$(GOIMPORTS) --install
@@ -54,7 +57,7 @@ image:
 	docker build --build-arg GO_BUILDER_IMAGE=$(GO_BUILDER_IMAGE) --build-arg GOPROXY=$(GOPROXY) --build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) -t $(IMAGE) .
 
 cluster:
-	kind create cluster --name $(CLUSTER) --config kind.yaml
+	kind create cluster --name $(CLUSTER) --image $(KIND_NODE_IMAGE) --config kind.yaml
 
 deploy: image
 	kind load docker-image $(IMAGE) --name $(CLUSTER)
@@ -73,6 +76,18 @@ deploy: image
 demo:
 	./scripts/label-nodes.sh
 	kubectl apply -f examples/aijob.yaml
+
+headlamp:
+	CLUSTER=$(CLUSTER) \
+	HEADLAMP_NAMESPACE=$(HEADLAMP_NAMESPACE) \
+	HEADLAMP_ADMIN_SERVICE_ACCOUNT=$(HEADLAMP_ADMIN_SERVICE_ACCOUNT) \
+	./scripts/install-headlamp.sh
+
+headlamp-token:
+	kubectl -n $(HEADLAMP_NAMESPACE) create token $(HEADLAMP_ADMIN_SERVICE_ACCOUNT) --duration=24h
+
+headlamp-port-forward:
+	kubectl -n $(HEADLAMP_NAMESPACE) port-forward --address 127.0.0.1 service/headlamp 4466:80
 
 benchmark:
 	go run ./cmd/labctl benchmark --cluster $(CLUSTER)

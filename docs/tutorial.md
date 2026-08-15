@@ -935,6 +935,14 @@ profiles:
 
 本地实验固定使用 Kubernetes 1.34.8、Go 1.24、JobSet 0.10.1 和 Kueue 0.14.3，还需要 Docker、kubectl、kind、make 和 Bash，不需要真实 GPU。Go 依赖使用 Kubernetes 1.34.1，和集群保持相同 minor；`make deploy` 会安装固定版本的 JobSet 和 Kueue。
 
+Ubuntu/Debian Linux 可以直接安装本地依赖：
+
+```bash
+./scripts/install-dev-deps.sh
+```
+
+脚本安装 Go 1.24.0、kubectl 1.34.8、kind、Docker Engine、make、Bash、pre-commit，并运行 `make tools` 准备项目本地的 goimports。
+
 先确认本地工具可用：
 
 ```bash
@@ -952,9 +960,18 @@ make cluster CLUSTER=ai-infra-lab-v134
 kubectl config current-context
 make deploy CLUSTER=ai-infra-lab-v134
 make demo
+make headlamp CLUSTER=ai-infra-lab-v134
 ```
 
 `make cluster` 会把当前 kubectl context 切换到新集群。`make deploy` 中的 kubectl 命令使用当前 context，因此部署前应确认输出是 `kind-ai-infra-lab-v134`。`CLUSTER` 参数同时告诉 kind 应把本地业务镜像加载到哪个集群。
+
+kind 节点镜像默认通过 `KIND_NODE_IMAGE` 使用 DaoCloud 代理。切回官方源：
+
+```bash
+make cluster \
+  CLUSTER=ai-infra-lab-v134 \
+  KIND_NODE_IMAGE=kindest/node:v1.34.8@sha256:02722c2dedddcfc00febf5d27fbeb9b7b2c14294c82109ff4a85d89ac9ba3256
+```
 
 部署顺序是：
 
@@ -967,6 +984,7 @@ flowchart TD
     AIJob[安装 AIJob CRD RBAC 与 Controller]
     Scheduler[安装自定义 kube-scheduler]
     Demo[标记模拟 GPU Node 并提交 AIJob]
+    Headlamp[安装 Headlamp 可视化界面]
 
     Build --> Load
     Load --> JobSet
@@ -974,6 +992,19 @@ flowchart TD
     Kueue --> AIJob
     AIJob --> Scheduler
     Scheduler --> Demo
+    Demo --> Headlamp
+```
+
+安装 Headlamp 后，在一个终端启动端口转发：
+
+```bash
+make headlamp-port-forward
+```
+
+浏览器打开 `http://127.0.0.1:4466`，选择 Token 登录。生成本地实验管理员 token：
+
+```bash
+make headlamp-token
 ```
 
 ### 镜像源
