@@ -116,6 +116,49 @@ func TestLifecycleDurationsUseWorkloadAndPodCreation(t *testing.T) {
 	}
 }
 
+func TestRelatedWorkloadsCanUseJobSetOwnerReference(t *testing.T) {
+	workloads := []Workload{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "wanted",
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: "jobset.x-k8s.io/v1alpha2",
+					Kind:       "JobSet",
+					Name:       "job-a",
+				}},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "unrelated"},
+		},
+	}
+	jobSets := []jobsetv1alpha2.JobSet{{ObjectMeta: metav1.ObjectMeta{Name: "job-a"}}}
+	got := relatedWorkloads(workloads, nil, jobSets)
+	if len(got) != 1 || got[0].Name != "wanted" {
+		t.Fatalf("unexpected related workloads: %#v", got)
+	}
+}
+
+func TestExerciseWorkloadNamesFitJobSetGeneratedPodNames(t *testing.T) {
+	kinds := []string{ExerciseCapacity, ExerciseWorkerFailure, ExerciseControllerRestart}
+	for _, kind := range kinds {
+		t.Run(kind, func(t *testing.T) {
+			name := exerciseWorkloadName(kind, newRunID(exerciseRunPrefix(kind)))
+			replicatedJobName := name + "-workers-0"
+			if len(replicatedJobName) > 50 {
+				t.Fatalf("replicated job name %q is too long: %d", replicatedJobName, len(replicatedJobName))
+			}
+		})
+	}
+}
+
+func TestExerciseWorkloadNamesStayReadable(t *testing.T) {
+	runID := "ex-cap-1786855813-5a8fc2fe"
+	if got := exerciseWorkloadName(ExerciseCapacity, runID); got != "cap-"+runID {
+		t.Fatalf("unexpected capacity workload name: %q", got)
+	}
+}
+
 func readProfile(t *testing.T, path string) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(path)

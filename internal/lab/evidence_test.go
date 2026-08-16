@@ -10,6 +10,7 @@ import (
 
 type fakeEvidenceSource struct {
 	discoveryError error
+	metricsError   error
 }
 
 func (f fakeEvidenceSource) Discover(context.Context, string, string) (Snapshot, error) {
@@ -21,6 +22,9 @@ func (f fakeEvidenceSource) ComponentLogs(context.Context) (map[string][]byte, e
 }
 
 func (f fakeEvidenceSource) MetricsSnapshot(context.Context, string, int) ([]byte, error) {
+	if f.metricsError != nil {
+		return nil, f.metricsError
+	}
 	return []byte("metric_total 1\n"), nil
 }
 
@@ -66,6 +70,31 @@ func TestTimedOutEvidenceIsWrittenAndReturnsError(t *testing.T) {
 	if !strings.Contains(string(data), `"complete": false`) ||
 		!strings.Contains(string(data), "context deadline exceeded") {
 		t.Fatalf("timeout was not preserved in manifest: %s", data)
+	}
+}
+
+func TestMetricsErrorsAreWarnings(t *testing.T) {
+	collector, err := NewEvidenceCollector(fakeEvidenceSource{
+		metricsError: context.DeadlineExceeded,
+	}, EvidenceOptions{
+		RunID: "run-metrics", Experiment: "capacity", OutputDir: t.TempDir(),
+		Expected: []string{"Capacity block diagnosed"},
+		Observed: []string{"Capacity block diagnosed"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, readErr := os.ReadFile(filepath.Join(root, "manifest.json"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(data), `"complete": true`) ||
+		!strings.Contains(string(data), `"warnings"`) {
+		t.Fatalf("metrics warning should not make evidence incomplete: %s", data)
 	}
 }
 

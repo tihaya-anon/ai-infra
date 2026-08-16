@@ -8,7 +8,8 @@ HEADLAMP_IMAGE="${HEADLAMP_IMAGE:-m.daocloud.io/ghcr.io/headlamp-k8s/headlamp:la
 HEADLAMP_MANIFEST_URL="${HEADLAMP_MANIFEST_URL:-https://raw.githubusercontent.com/kubernetes-sigs/headlamp/main/kubernetes-headlamp.yaml}"
 
 repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-manifest="${repo_root}/.tools/manifests/headlamp.yaml"
+manifest_dir="${repo_root}/.tools/manifests/headlamp"
+manifest="${manifest_dir}/base.yaml"
 
 log() {
   printf '\n==> %s\n' "$*"
@@ -38,13 +39,34 @@ load_image_into_kind() {
 
 apply_headlamp() {
   log "Applying Headlamp manifest"
-  mkdir -p "$(dirname "$manifest")"
+  mkdir -p "$manifest_dir"
   curl -fsSL "$HEADLAMP_MANIFEST_URL" -o "$manifest"
   sed -i "s#ghcr.io/headlamp-k8s/headlamp:latest#${HEADLAMP_IMAGE}#" "$manifest"
 
-  kubectl apply -f "$manifest"
-  kubectl -n "$NAMESPACE" patch deployment headlamp --type=strategic \
-    -p '{"spec":{"template":{"spec":{"containers":[{"name":"headlamp","imagePullPolicy":"IfNotPresent"}]}}}}'
+  cat >"${manifest_dir}/controller-manager-patch.yaml" <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: headlamp
+  namespace: ${NAMESPACE}
+spec:
+  template:
+    spec:
+      containers:
+        - name: headlamp
+          imagePullPolicy: IfNotPresent
+EOF
+
+  cat >"${manifest_dir}/kustomization.yaml" <<EOF
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - base.yaml
+patches:
+  - path: controller-manager-patch.yaml
+EOF
+
+  kubectl apply -k "$manifest_dir"
   kubectl -n "$NAMESPACE" rollout status deployment/headlamp --timeout=180s
 }
 

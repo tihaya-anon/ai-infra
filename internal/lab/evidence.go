@@ -43,6 +43,7 @@ type EvidenceManifest struct {
 	Expected      []string          `json:"expected"`
 	Observed      []string          `json:"observed"`
 	Missing       []string          `json:"missing,omitempty"`
+	Warnings      []string          `json:"warnings,omitempty"`
 	Files         map[string]string `json:"files"`
 }
 
@@ -128,17 +129,18 @@ func (c *EvidenceCollector) Collect(ctx context.Context) (string, error) {
 		data, err := c.source.MetricsSnapshot(ctx, service.name, service.port)
 		path := filepath.Join("metrics", safeName(service.name)+".prom")
 		if err != nil {
-			manifest.Missing = append(manifest.Missing, service.name+": "+err.Error())
+			manifest.Warnings = append(manifest.Warnings, service.name+": "+err.Error())
 			continue
 		}
 		if err := writeFile(filepath.Join(root, path), data); err != nil {
-			manifest.Missing = append(manifest.Missing, path+": "+err.Error())
+			manifest.Warnings = append(manifest.Warnings, path+": "+err.Error())
 		} else {
 			manifest.Files[service.name] = path
 		}
 	}
 
 	sort.Strings(manifest.Missing)
+	sort.Strings(manifest.Warnings)
 	conditionsMet := expectedObserved(manifest.Expected, manifest.Observed)
 	manifest.Complete = len(manifest.Missing) == 0 && conditionsMet
 	if !conditionsMet {

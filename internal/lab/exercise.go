@@ -54,7 +54,7 @@ func NewExerciseRunner(cluster *Cluster, options ExerciseOptions) (*ExerciseRunn
 
 // Run executes the selected exercise, writes evidence, and cleans only its run.
 func (r *ExerciseRunner) Run(ctx context.Context) (runErr error) {
-	runID := newRunID("exercise-" + r.options.Kind)
+	runID := newRunID(exerciseRunPrefix(r.options.Kind))
 	benchmark := &BenchmarkRunner{cluster: r.cluster, options: BenchmarkOptions{
 		Namespace: r.options.Namespace, Timeout: r.options.Timeout,
 	}}
@@ -87,7 +87,7 @@ func (r *ExerciseRunner) execute(
 	switch r.options.Kind {
 	case ExerciseCapacity:
 		definition := WorkloadDefinition{
-			Name: "capacity-" + runID, Workers: 1, GPUPerWorker: 13,
+			Name: exerciseWorkloadName(r.options.Kind, runID), Workers: 1, GPUPerWorker: 13,
 			Args: []string{"--mode=complete", "--duration=1s"},
 		}
 		if err := benchmark.createAIJob(ctx, runID, r.options.Kind, definition); err != nil {
@@ -101,7 +101,7 @@ func (r *ExerciseRunner) execute(
 		return []string{"Capacity block diagnosed"}, observed, err
 	case ExerciseWorkerFailure:
 		definition := WorkloadDefinition{
-			Name: "failure-" + runID, Workers: 2, GPUPerWorker: 1,
+			Name: exerciseWorkloadName(r.options.Kind, runID), Workers: 2, GPUPerWorker: 1,
 			Args: []string{"--mode=complete", "--duration=1s", "--fail-indexes=1"},
 		}
 		if err := benchmark.createAIJob(ctx, runID, r.options.Kind, definition); err != nil {
@@ -117,7 +117,7 @@ func (r *ExerciseRunner) execute(
 		return []string{"AIJob Failed"}, observed, err
 	case ExerciseControllerRestart:
 		definition := WorkloadDefinition{
-			Name: "restart-" + runID, Workers: 1, GPUPerWorker: 1,
+			Name: exerciseWorkloadName(r.options.Kind, runID), Workers: 1, GPUPerWorker: 1,
 			Args: []string{"--mode=wait"},
 		}
 		if err := benchmark.createAIJob(ctx, runID, r.options.Kind, definition); err != nil {
@@ -132,6 +132,32 @@ func (r *ExerciseRunner) execute(
 		return []string{"Controller replaced", "one owned JobSet"}, observed, err
 	default:
 		panic("validated exercise kind is not implemented")
+	}
+}
+
+func exerciseRunPrefix(kind string) string {
+	switch kind {
+	case ExerciseCapacity:
+		return "ex-cap"
+	case ExerciseWorkerFailure:
+		return "ex-fail"
+	case ExerciseControllerRestart:
+		return "ex-restart"
+	default:
+		return "ex"
+	}
+}
+
+func exerciseWorkloadName(kind, runID string) string {
+	switch kind {
+	case ExerciseCapacity:
+		return "cap-" + runID
+	case ExerciseWorkerFailure:
+		return "fail-" + runID
+	case ExerciseControllerRestart:
+		return "restart-" + runID
+	default:
+		return "exercise-" + runID
 	}
 }
 

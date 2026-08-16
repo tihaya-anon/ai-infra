@@ -978,7 +978,8 @@ make cluster \
 ```mermaid
 flowchart TD
     Build[构建 controller scheduler worker 镜像]
-    Load[加载镜像到 kind 节点]
+    Preload[预加载 JobSet 与 Kueue 控制器镜像]
+    Load[加载本项目镜像到 kind 节点]
     JobSet[安装 JobSet CRD 与 Controller]
     Kueue[安装 Kueue CRD 与 Controller]
     AIJob[安装 AIJob CRD RBAC 与 Controller]
@@ -986,7 +987,8 @@ flowchart TD
     Demo[标记模拟 GPU Node 并提交 AIJob]
     Headlamp[安装 Headlamp 可视化界面]
 
-    Build --> Load
+    Build --> Preload
+    Preload --> Load
     Load --> JobSet
     JobSet --> Kueue
     Kueue --> AIJob
@@ -994,6 +996,61 @@ flowchart TD
     Scheduler --> Demo
     Demo --> Headlamp
 ```
+
+### Dockerfile 和 deploy 清单分别做什么
+
+`Dockerfile` 不会向 Kubernetes 注册任何对象。它只做镜像构建：
+
+1. 在 Go builder 镜像中下载依赖；
+2. 编译三个 Linux 静态二进制：`controller`、`scheduler`、`worker`；
+3. 把这三个二进制复制进 distroless 运行时镜像；
+4. 得到同一个业务镜像 `ai-infra-lab:dev`。
+
+这个镜像里同时有三个入口程序，但镜像本身只是一个文件系统和启动命令集合。它不会创建
+CRD，不会启动 Controller，也不会把 Scheduler 插件注册到集群。`make deploy` 里的
+`kind load docker-image` 会把这个本地业务镜像塞进 kind 节点，避免节点再去远端 registry 拉取。
+JobSet 和 Kueue 控制器镜像也会在安装官方清单前预加载到 kind 节点。
+
+真正让集群“认识”这些东西的是 `deploy/` 下的 YAML 被 `kubectl apply` 到 API Server：
+
+| 文件 | 创建什么 | 怎么理解 |
+| --- | --- | --- |
+| `deploy/crd.yaml` | `CustomResourceDefinition/aijobs.infra.example.io` | 向 API Server 注册新的资源类型 `AIJob`。注册后，用户才可以提交 `kind: AIJob` 的 YAML。 |
+| `deploy/rbac.yaml` | Namespace、ServiceAccount、ClusterRole、RoleBinding 等 | 给 Controller 和自定义 Scheduler 准备运行身份与权限。 |
+| `deploy/kueue-resources.yaml` | `Topology`、`ResourceFlavor`、`ClusterQueue`、`LocalQueue` | 创建 Kueue 的自定义资源实例。它们的 CRD 已经由前面的 Kueue 安装步骤提供。 |
+| `deploy/controller.yaml` | `Deployment/aijob-controller` 和 metrics `Service` | 在集群里启动 `/controller` 进程。这个进程 watch `AIJob`，并创建/更新 JobSet。 |
+| `deploy/scheduler-config.yaml` | Scheduler `ConfigMap`、`Deployment/ai-scheduler` 和 metrics `Service` | 在集群里启动 `/scheduler` 进程，并通过配置启用 `GPUTopology` score 插件。 |
+
+注意，Kubernetes 不根据 YAML 文件名创建资源。文件名只是给人看的分组；API Server 只看每个
+document 里的 `apiVersion`、`kind`、`metadata.name` 和 `metadata.namespace`。一个 YAML 文件可以包含多个
+document，本项目用 `---` 把多个对象放在同一个文件里。
+
+所以这里有三层关系：
+
+```text
+Dockerfile
+  -> 构建包含 /controller /scheduler /worker 的镜像
+
+deploy/*.yaml
+  -> 创建 Kubernetes 对象
+
+CRD
+  -> 先注册一种新的资源类型
+  -> 之后才能创建这种类型的自定义资源实例
+```
+
+`AIJob` 这一层是本项目自己的 CRD。`Kueue` 的 `Topology`、`ResourceFlavor`、`ClusterQueue` 和
+`LocalQueue` 也是自定义资源，但它们属于 Kueue；`make deploy` 先安装 Kueue 官方清单，随后才应用
+`deploy/kueue-resources.yaml` 创建这些实例。
+
+Controller 和 Scheduler 的“注册”方式也不同：
+
+- Controller 不是注册成某个 Kubernetes 插件；它只是一个普通 Deployment，启动后用
+  ServiceAccount 权限 watch `AIJob`，再写 JobSet 和 status。
+- 自定义 Scheduler 也不是改掉集群默认 scheduler；它是额外运行的一个 scheduler Deployment。
+  `/scheduler` 这个二进制在编译时已经包含 `GPUTopology` 插件，`scheduler-config.yaml` 再用 profile
+  启用插件，并声明 `schedulerName: ai-scheduler`。Controller 创建 Worker Pod 时写入同名
+  `schedulerName`，这些 Pod 才会交给它调度。
 
 安装 Headlamp 后，在一个终端启动端口转发：
 
@@ -1015,7 +1072,13 @@ make headlamp-token
 - distroless 原始镜像位于 `gcr.io`，Docker Hub mirror 不会代理它；
 - Go 模块默认从 `GOPROXY` 下载。
 
-本项目默认通过 `m.daocloud.io` 获取 builder 和 distroless 镜像，并通过 `goproxy.cn` 下载 Go 模块。这些地址用于本地实验；生产构建应使用组织自己的可信镜像仓库，并按 digest 固定基础镜像。切回官方地址：
+部署阶段还需要 JobSet 和 Kueue 控制器镜像。`make deploy` 会先把它们通过 `EXTERNAL_IMAGE_MIRROR`
+拉到宿主机，再按原始 `registry.k8s.io/...` 镜像名导入 kind 节点；Kueue 官方清单在本实验的
+Kustomize overlay 中声明为 `imagePullPolicy: IfNotPresent`，因此节点会优先使用本地缓存。
+
+本项目默认通过 `m.daocloud.io` 获取 builder、distroless、JobSet 和 Kueue 镜像，并通过
+`goproxy.cn` 下载 Go 模块。这些地址用于本地实验；生产构建应使用组织自己的可信镜像仓库，并按
+digest 固定基础镜像。切回官方地址：
 
 ```bash
 make image \
@@ -1024,7 +1087,13 @@ make image \
   RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
 ```
 
-`make deploy` 还会从 GitHub Release 安装 JobSet 和 Kueue 清单，这部分也不经过 Docker Hub mirror。
+如果要让 JobSet 和 Kueue 控制器镜像也直接使用官方 registry，可在部署时清空外部镜像代理：
+
+```bash
+make deploy CLUSTER=ai-infra-lab-v134 EXTERNAL_IMAGE_MIRROR=
+```
+
+`make deploy` 仍会从 GitHub Release 安装 JobSet 和 Kueue 清单；镜像拉取则由上面的预加载步骤处理。
 
 kind 没有 GPU Device Plugin。`scripts/label-nodes.sh` 会：
 

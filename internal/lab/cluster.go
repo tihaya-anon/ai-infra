@@ -99,14 +99,17 @@ func (c *Cluster) Discover(ctx context.Context, namespace, runID string) (Snapsh
 	workloads := &WorkloadList{}
 	jobs := &batchv1.JobList{}
 	pods := &corev1.PodList{}
-	for _, object := range []client.ObjectList{aijobs, jobSets, workloads, jobs, pods} {
+	for _, object := range []client.ObjectList{aijobs, jobSets, jobs, pods} {
 		if err := c.Client.List(ctx, object, inNamespace, selector); err != nil {
 			return result, fmt.Errorf("list %T: %w", object, err)
 		}
 	}
+	if err := c.Client.List(ctx, workloads, inNamespace); err != nil {
+		return result, fmt.Errorf("list %T: %w", workloads, err)
+	}
 	result.AIJobs = aijobs.Items
 	result.JobSets = jobSets.Items
-	result.Workloads = workloads.Items
+	result.Workloads = relatedWorkloads(workloads.Items, result.AIJobs, result.JobSets)
 	result.Jobs = jobs.Items
 	result.Pods = pods.Items
 
@@ -126,6 +129,34 @@ func (c *Cluster) Discover(ctx context.Context, namespace, runID string) (Snapsh
 	}
 	result.Events = filterEvents(events.Items, result)
 	return result, nil
+}
+
+func relatedWorkloads(
+	workloads []Workload,
+	aijobs []aiv1alpha1.AIJob,
+	jobSets []jobsetv1alpha2.JobSet,
+) []Workload {
+	names := make(map[string]struct{}, len(aijobs)+len(jobSets))
+	for _, job := range aijobs {
+		names[job.Name] = struct{}{}
+	}
+	for _, jobSet := range jobSets {
+		names[jobSet.Name] = struct{}{}
+	}
+	result := make([]Workload, 0, len(workloads))
+	for _, workload := range workloads {
+		if _, ok := names[workload.Labels[topology.JobLabel]]; ok {
+			result = append(result, workload)
+			continue
+		}
+		for name := range names {
+			if ownerNamed(workload.OwnerReferences, name) {
+				result = append(result, workload)
+				break
+			}
+		}
+	}
+	return result
 }
 
 // WaitForPodScheduled waits for a run-scoped workload Pod to bind to a Node.
