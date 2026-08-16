@@ -9,12 +9,18 @@ HEADLAMP_ADMIN_SERVICE_ACCOUNT ?= headlamp-admin
 JOBSET_VERSION ?= v0.10.1
 KUEUE_VERSION ?= v0.14.3
 GOIMPORTS := ./scripts/goimports.sh
+CONTROLLER_GEN := ./scripts/controller-gen.sh
 ENVTEST_K8S_VERSION ?= 1.34.0
 
-.PHONY: tools fmt fmt-check line-length vet test test-api test-e2e verify hooks build image cluster deploy demo headlamp headlamp-token headlamp-port-forward benchmark benchmark-validate failure-capacity failure-worker failure-restart clean
+.PHONY: tools generate fmt fmt-check line-length vet test test-api test-e2e verify hooks build image cluster deploy demo headlamp headlamp-token headlamp-port-forward benchmark benchmark-validate failure-capacity failure-worker failure-restart clean
 
 tools:
 	$(GOIMPORTS) --install
+	$(CONTROLLER_GEN) --install
+
+generate: tools
+	$(CONTROLLER_GEN) object paths=./api/...
+	$(GOIMPORTS) -w ./api
 
 fmt:
 	$(GOIMPORTS) -w .

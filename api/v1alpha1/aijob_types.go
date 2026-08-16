@@ -1,9 +1,6 @@
 package v1alpha1
 
-import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-)
+import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 // AIJobSpec describes the worker group and its preferred GPU topology.
 type AIJobSpec struct {
@@ -30,6 +27,7 @@ type AIJobStatus struct {
 }
 
 // AIJob is the declarative API consumed by the training-job controller.
+// +kubebuilder:object:root=true
 type AIJob struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -39,53 +37,9 @@ type AIJob struct {
 }
 
 // AIJobList contains a list of AIJobs.
+// +kubebuilder:object:root=true
 type AIJobList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []AIJob `json:"items"`
 }
-
-func (in *AIJob) DeepCopyInto(out *AIJob) {
-	*out = *in
-	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
-	if in.Spec.Args != nil {
-		out.Spec.Args = append([]string(nil), in.Spec.Args...)
-	}
-	if in.Status.Conditions != nil {
-		out.Status.Conditions = make([]metav1.Condition, len(in.Status.Conditions))
-		copy(out.Status.Conditions, in.Status.Conditions)
-	}
-}
-
-func (in *AIJob) DeepCopy() *AIJob {
-	if in == nil {
-		return nil
-	}
-	out := new(AIJob)
-	in.DeepCopyInto(out)
-	return out
-}
-
-func (in *AIJob) DeepCopyObject() runtime.Object { return in.DeepCopy() }
-
-func (in *AIJobList) DeepCopyInto(out *AIJobList) {
-	*out = *in
-	in.ListMeta.DeepCopyInto(&out.ListMeta)
-	if in.Items != nil {
-		out.Items = make([]AIJob, len(in.Items))
-		for i := range in.Items {
-			in.Items[i].DeepCopyInto(&out.Items[i])
-		}
-	}
-}
-
-func (in *AIJobList) DeepCopy() *AIJobList {
-	if in == nil {
-		return nil
-	}
-	out := new(AIJobList)
-	in.DeepCopyInto(out)
-	return out
-}
-
-func (in *AIJobList) DeepCopyObject() runtime.Object { return in.DeepCopy() }
