@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../deploy/schemas/aijob-v1alpha1.schema.json
 apiVersion: infra.example.io/v1alpha1
 kind: AIJob
 metadata:
@@ -10,4 +11,9 @@ spec:
   gpuResource: example.com/gpu
   topology: any
   image: ai-infra-lab:dev
+  jobSetOverrides:
+    failurePolicy:
+      rules:
+        - name: fail-workers
+          action: FailJobSet
   args: ["--mode=complete", "--duration=2s", "--fail-indexes=1"]

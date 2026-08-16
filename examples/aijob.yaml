@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../deploy/schemas/aijob-v1alpha1.schema.json
 apiVersion: infra.example.io/v1alpha1
 kind: AIJob
 metadata:

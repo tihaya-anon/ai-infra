@@ -1,6 +1,9 @@
 package v1alpha1
 
-import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	jobsetv1alpha2 "sigs.k8s.io/jobset/api/jobset/v1alpha2"
+)
 
 // AIJobSpec describes the worker group and its preferred GPU topology.
 type AIJobSpec struct {
@@ -22,6 +25,13 @@ type AIJobSpec struct {
 	Image string `json:"image,omitempty"`
 	// Args is the ordered argument list passed to every worker container.
 	Args []string `json:"args,omitempty"`
+
+	JobSetOverrides *JobSetOverrides `json:"jobSetOverrides,omitempty"`
+}
+
+type JobSetOverrides struct {
+	FailurePolicy *jobsetv1alpha2.FailurePolicy `json:"failurePolicy,omitempty"`
+	SuccessPolicy *jobsetv1alpha2.SuccessPolicy `json:"successPolicy,omitempty"`
 }
 
 // AIJobStatus summarizes the JobSet observed by the controller.

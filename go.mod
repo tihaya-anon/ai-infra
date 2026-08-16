@@ -3,6 +3,7 @@ module github.com/tihaya-anon/ai-infra-lab
 go 1.24.0
 
 require (
+	github.com/onsi/gomega v1.38.2
 	github.com/prometheus/client_golang v1.23.2
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/api v0.34.1
