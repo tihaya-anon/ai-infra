@@ -11,7 +11,7 @@ func TestControllerMetricClassificationAndRegistration(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics := NewMetrics(registry)
 	metrics.observe(time.Now(), "success")
-	metrics.recordError("jobset")
+	metrics.recordError(errorOperationJobSet)
 	metrics.recordJobSetChange("create")
 	metrics.recordJobSetChange("ignored")
 	metrics.recordStatusChange(true)

@@ -15,6 +15,14 @@ type Metrics struct {
 	duration        *prometheus.HistogramVec
 }
 
+type errorOperation string
+
+const (
+	errorOperationGet    errorOperation = "get"
+	errorOperationJobSet errorOperation = "jobset"
+	errorOperationStatus errorOperation = "status"
+)
+
 // NewMetrics constructs and registers one Controller metric set.
 func NewMetrics(registerer prometheus.Registerer) *Metrics {
 	metrics := &Metrics{
@@ -55,9 +63,9 @@ func (m *Metrics) observe(start time.Time, result string) {
 	m.duration.WithLabelValues(result).Observe(time.Since(start).Seconds())
 }
 
-func (m *Metrics) recordError(operation string) {
+func (m *Metrics) recordError(operation errorOperation) {
 	if m != nil {
-		m.errors.WithLabelValues(operation).Inc()
+		m.errors.WithLabelValues(string(operation)).Inc()
 	}
 }
 

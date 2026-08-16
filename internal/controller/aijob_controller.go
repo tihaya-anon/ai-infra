@@ -23,6 +23,14 @@ import (
 // SchedulerName selects the scheduler profile containing the GPU topology plugin.
 const SchedulerName = "ai-scheduler"
 
+type reconcileResult string
+
+const (
+	reconcileSuccess  reconcileResult = "success"
+	reconcileError    reconcileResult = "error"
+	reconcileNotFound reconcileResult = "not_found"
+)
+
 var _ reconcile.Reconciler = &AIJobReconciler{}
 
 // AIJobReconciler adapts the AIJob API to the standard JobSet API.
@@ -38,35 +46,33 @@ func (r *AIJobReconciler) Reconcile(
 	request ctrl.Request,
 ) (ctrl.Result, error) {
 	started := time.Now()
-	result := "success"
-	defer func() { r.Metrics.observe(started, result) }()
+	done := func(result reconcileResult, err error) (ctrl.Result, error) {
+		r.Metrics.observe(started, string(result))
+		return ctrl.Result{}, err
+	}
 
 	job := &aiv1alpha1.AIJob{}
 	if err := r.Get(ctx, request.NamespacedName, job); err != nil {
 		if apierrors.IsNotFound(err) {
-			result = "not_found"
-		} else {
-			result = "error"
-			r.Metrics.recordError("get")
+			return done(reconcileNotFound, nil)
 		}
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		r.Metrics.recordError(errorOperationGet)
+		return done(reconcileError, client.IgnoreNotFound(err))
 	}
 
 	jobSet, operation, err := r.reconcileJobSet(ctx, job)
 	if err != nil {
-		result = "error"
-		r.Metrics.recordError("jobset")
-		return ctrl.Result{}, err
+		r.Metrics.recordError(errorOperationJobSet)
+		return done(reconcileError, err)
 	}
 	r.Metrics.recordJobSetChange(operation)
 	changed, err := r.reconcileStatus(ctx, job, jobSet)
 	if err != nil {
-		result = "error"
-		r.Metrics.recordError("status")
-		return ctrl.Result{}, err
+		r.Metrics.recordError(errorOperationStatus)
+		return done(reconcileError, err)
 	}
 	r.Metrics.recordStatusChange(changed)
-	return ctrl.Result{}, nil
+	return done(reconcileSuccess, nil)
 }
 
 func (r *AIJobReconciler) reconcileJobSet(
