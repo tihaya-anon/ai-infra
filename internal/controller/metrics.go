@@ -15,12 +15,35 @@ type Metrics struct {
 	duration        *prometheus.HistogramVec
 }
 
+type reconcileResult string
+
+const (
+	reconcileSuccess  reconcileResult = "success"
+	reconcileError    reconcileResult = "error"
+	reconcileNotFound reconcileResult = "not_found"
+)
+
 type errorOperation string
 
 const (
 	errorOperationGet    errorOperation = "get"
 	errorOperationJobSet errorOperation = "jobset"
 	errorOperationStatus errorOperation = "status"
+)
+
+type jobSetChangeOperation string
+
+const (
+	jobSetOperationCreate    jobSetChangeOperation = "create"
+	jobSetOperationUpdate    jobSetChangeOperation = "update"
+	jobSetOperationUnchanged jobSetChangeOperation = "unchanged"
+)
+
+type statusChangeResult string
+
+const (
+	statusChangeUpdated   statusChangeResult = "updated"
+	statusChangeUnchanged statusChangeResult = "unchanged"
 )
 
 // NewMetrics constructs and registers one Controller metric set.
@@ -55,12 +78,12 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 	return metrics
 }
 
-func (m *Metrics) observe(start time.Time, result string) {
+func (m *Metrics) observe(start time.Time, result reconcileResult) {
 	if m == nil {
 		return
 	}
-	m.reconciliations.WithLabelValues(result).Inc()
-	m.duration.WithLabelValues(result).Observe(time.Since(start).Seconds())
+	m.reconciliations.WithLabelValues(string(result)).Inc()
+	m.duration.WithLabelValues(string(result)).Observe(time.Since(start).Seconds())
 }
 
 func (m *Metrics) recordError(operation errorOperation) {
@@ -69,9 +92,9 @@ func (m *Metrics) recordError(operation errorOperation) {
 	}
 }
 
-func (m *Metrics) recordJobSetChange(operation string) {
-	if m != nil && (operation == "create" || operation == "update") {
-		m.jobSetChanges.WithLabelValues(operation).Inc()
+func (m *Metrics) recordJobSetChange(operation jobSetChangeOperation) {
+	if m != nil && (operation == jobSetOperationCreate || operation == jobSetOperationUpdate) {
+		m.jobSetChanges.WithLabelValues(string(operation)).Inc()
 	}
 }
 
@@ -79,9 +102,9 @@ func (m *Metrics) recordStatusChange(changed bool) {
 	if m == nil {
 		return
 	}
-	result := "unchanged"
+	result := statusChangeUnchanged
 	if changed {
-		result = "updated"
+		result = statusChangeUpdated
 	}
-	m.statusChanges.WithLabelValues(result).Inc()
+	m.statusChanges.WithLabelValues(string(result)).Inc()
 }

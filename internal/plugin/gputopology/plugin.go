@@ -52,12 +52,12 @@ func (p *Plugin) Score(
 	started := time.Now()
 	node := nodeInfo.Node()
 	if node == nil {
-		p.metrics.recordError("node_missing")
-		p.metrics.observeScore(started, "error", preference(pod), "")
+		p.metrics.recordError(errorReasonNodeMissing)
+		p.metrics.observeScore(started, scoreError, preference(pod), "")
 		return 0, fwk.NewStatus(fwk.Error, fmt.Sprintf("node not found in %s", nodeInfo.String()))
 	}
 	p.metrics.observeScore(
-		started, "success", preference(pod), node.Labels[topology.FabricLabel],
+		started, scoreSuccess, preference(pod), node.Labels[topology.FabricLabel],
 	)
 	return topologyScore(preference(pod), node.Labels), nil
 }

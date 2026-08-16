@@ -14,6 +14,21 @@ type Metrics struct {
 	duration   *prometheus.HistogramVec
 }
 
+type scoreResult string
+
+const (
+	scoreSuccess scoreResult = "success"
+	scoreError   scoreResult = "error"
+)
+
+type errorOperation string
+
+const errorOperationScore errorOperation = "score"
+
+type errorReason string
+
+const errorReasonNodeMissing errorReason = "node_missing"
+
 // NewMetrics constructs and registers one Scheduler plugin metric set.
 func NewMetrics(registerer prometheus.Registerer) *Metrics {
 	metrics := &Metrics{
@@ -39,22 +54,22 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 	return metrics
 }
 
-func (m *Metrics) observeScore(started time.Time, result, preference, fabric string) {
+func (m *Metrics) observeScore(started time.Time, result scoreResult, preference, fabric string) {
 	if m == nil {
 		return
 	}
-	m.scores.WithLabelValues(result).Inc()
-	m.duration.WithLabelValues(result).Observe(time.Since(started).Seconds())
-	if result == "success" {
+	m.scores.WithLabelValues(string(result)).Inc()
+	m.duration.WithLabelValues(string(result)).Observe(time.Since(started).Seconds())
+	if result == scoreSuccess {
 		m.topologies.WithLabelValues(
 			normalizePreference(preference), normalizeFabric(fabric),
 		).Inc()
 	}
 }
 
-func (m *Metrics) recordError(reason string) {
+func (m *Metrics) recordError(reason errorReason) {
 	if m != nil {
-		m.errors.WithLabelValues("score", reason).Inc()
+		m.errors.WithLabelValues(string(errorOperationScore), string(reason)).Inc()
 	}
 }
 

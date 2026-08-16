@@ -10,9 +10,9 @@ import (
 func TestSchedulerMetricNormalizationAndErrorAccounting(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics := NewMetrics(registry)
-	metrics.observeScore(time.Now(), "success", "custom-user-value", "custom-node-value")
-	metrics.observeScore(time.Now(), "error", "nvlink", "")
-	metrics.recordError("node_missing")
+	metrics.observeScore(time.Now(), scoreSuccess, "custom-user-value", "custom-node-value")
+	metrics.observeScore(time.Now(), scoreError, "nvlink", "")
+	metrics.recordError(errorReasonNodeMissing)
 
 	families, err := registry.Gather()
 	if err != nil {

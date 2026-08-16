@@ -23,14 +23,6 @@ import (
 // SchedulerName selects the scheduler profile containing the GPU topology plugin.
 const SchedulerName = "ai-scheduler"
 
-type reconcileResult string
-
-const (
-	reconcileSuccess  reconcileResult = "success"
-	reconcileError    reconcileResult = "error"
-	reconcileNotFound reconcileResult = "not_found"
-)
-
 var _ reconcile.Reconciler = &AIJobReconciler{}
 
 // AIJobReconciler adapts the AIJob API to the standard JobSet API.
@@ -47,7 +39,7 @@ func (r *AIJobReconciler) Reconcile(
 ) (ctrl.Result, error) {
 	started := time.Now()
 	done := func(result reconcileResult, err error) (ctrl.Result, error) {
-		r.Metrics.observe(started, string(result))
+		r.Metrics.observe(started, result)
 		return ctrl.Result{}, err
 	}
 
@@ -78,7 +70,7 @@ func (r *AIJobReconciler) Reconcile(
 func (r *AIJobReconciler) reconcileJobSet(
 	ctx context.Context,
 	job *aiv1alpha1.AIJob,
-) (*jobsetv1alpha2.JobSet, string, error) {
+) (*jobsetv1alpha2.JobSet, jobSetChangeOperation, error) {
 	desired := desiredJobSet(job)
 	jobSet := &jobsetv1alpha2.JobSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -111,15 +103,15 @@ func (r *AIJobReconciler) reconcileStatus(
 	return true, r.Status().Update(ctx, job)
 }
 
-func operationLabel(operation controllerutil.OperationResult) string {
+func operationLabel(operation controllerutil.OperationResult) jobSetChangeOperation {
 	switch operation {
 	case controllerutil.OperationResultCreated:
-		return "create"
+		return jobSetOperationCreate
 	case controllerutil.OperationResultUpdated, controllerutil.OperationResultUpdatedStatus,
 		controllerutil.OperationResultUpdatedStatusOnly:
-		return "update"
+		return jobSetOperationUpdate
 	default:
-		return "unchanged"
+		return jobSetOperationUnchanged
 	}
 }
 

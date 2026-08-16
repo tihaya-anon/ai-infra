@@ -10,10 +10,10 @@ import (
 func TestControllerMetricClassificationAndRegistration(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics := NewMetrics(registry)
-	metrics.observe(time.Now(), "success")
+	metrics.observe(time.Now(), reconcileSuccess)
 	metrics.recordError(errorOperationJobSet)
-	metrics.recordJobSetChange("create")
-	metrics.recordJobSetChange("ignored")
+	metrics.recordJobSetChange(jobSetOperationCreate)
+	metrics.recordJobSetChange(jobSetChangeOperation("ignored"))
 	metrics.recordStatusChange(true)
 
 	families, err := registry.Gather()
@@ -47,10 +47,10 @@ func TestControllerMetricClassificationAndRegistration(t *testing.T) {
 }
 
 func TestOperationLabelIsBounded(t *testing.T) {
-	if got := operationLabel("created"); got != "create" {
+	if got := operationLabel("created"); got != jobSetOperationCreate {
 		t.Fatalf("got %q", got)
 	}
-	if got := operationLabel("unexpected"); got != "unchanged" {
+	if got := operationLabel("unexpected"); got != jobSetOperationUnchanged {
 		t.Fatalf("got %q", got)
 	}
 }
