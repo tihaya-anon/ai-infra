@@ -15,6 +15,9 @@ data:
     profiles:
       - schedulerName: ai-scheduler
         plugins:
+          filter:
+            enabled:
+              - name: GPUTopology
           score:
             enabled:
               - name: GPUTopology

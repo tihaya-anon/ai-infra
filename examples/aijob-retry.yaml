@@ -9,7 +9,8 @@ spec:
   workers: 4
   gpuPerWorker: 1
   gpuResource: example.com/gpu
-  topology: any
+  topology:
+    preference: any
   image: ai-infra-lab:dev
   jobSetOverrides:
     failurePolicy:

@@ -9,6 +9,7 @@ spec:
   workers: 1
   gpuPerWorker: 2
   gpuResource: example.com/gpu
-  topology: any
+  topology:
+    preference: any
   image: ai-infra-lab:dev
   args: ["--mode=wait"]

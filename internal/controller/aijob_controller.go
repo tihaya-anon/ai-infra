@@ -225,14 +225,25 @@ func workerContainer(job *aiv1alpha1.AIJob) corev1.Container {
 	}
 }
 
-func schedulingAnnotations(preference string) map[string]string {
-	if preference == "same-rack" {
-		return map[string]string{topology.RequiredTopologyAnnotation: topology.RackLabel}
+func schedulingAnnotations(topologyConfig aiv1alpha1.Topology) map[string]string {
+	annotationMap := map[string]string{}
+
+	if topologyConfig.Preference == topology.FabricNVLink ||
+		topologyConfig.Preference == topology.FabricPCIe {
+		annotationMap[topology.PreferenceAnnotation] = topologyConfig.Preference
 	}
-	if preference == topology.FabricNVLink || preference == topology.FabricPCIe {
-		return map[string]string{topology.PreferenceAnnotation: preference}
+
+	switch topologyConfig.Required {
+	case "same-rack":
+		annotationMap[topology.RequiredTopologyAnnotation] = topology.RackLabel
+	case topology.FabricNVLink, topology.FabricPCIe:
+		annotationMap[topology.RequiredFabricAnnotation] = topologyConfig.Required
 	}
-	return nil
+
+	if len(annotationMap) == 0 {
+		return nil
+	}
+	return annotationMap
 }
 
 // statusFromJobSet exposes the standard JobSet conditions through the AIJob API.

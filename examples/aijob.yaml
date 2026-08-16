@@ -9,6 +9,7 @@ spec:
   workers: 4
   gpuPerWorker: 2
   gpuResource: example.com/gpu
-  topology: nvlink
+  topology:
+    preference: nvlink
   image: ai-infra-lab:dev
   args: ["--mode=complete", "--duration=5s"]

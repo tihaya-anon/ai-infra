@@ -2,7 +2,7 @@
 apiVersion: infra.example.io/v1alpha1
 kind: AIJob
 metadata:
-  name: selected-worker-failure
+  name: required-nvlink-training
   labels:
     kueue.x-k8s.io/queue-name: training
 spec:
@@ -10,11 +10,7 @@ spec:
   gpuPerWorker: 1
   gpuResource: example.com/gpu
   topology:
-    preference: any
+    preference: nvlink
+    required: nvlink
   image: ai-infra-lab:dev
-  jobSetOverrides:
-    failurePolicy:
-      rules:
-        - name: fail-workers
-          action: FailJobSet
-  args: ["--mode=complete", "--duration=2s", "--fail-indexes=1"]
+  args: ["--mode=complete", "--duration=5s"]

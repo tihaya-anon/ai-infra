@@ -20,10 +20,8 @@ type AIJobSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="gpuResource is immutable"
 	GPUResource string `json:"gpuResource,omitempty"`
 	// Topology requests a supported node-fabric preference or rack constraint.
-	// +kubebuilder:validation:Enum=any;nvlink;pcie;same-rack
-	// +kubebuilder:default=any
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="topology is immutable"
-	Topology string `json:"topology,omitempty"`
+	Topology Topology `json:"topology,omitempty"`
 	// Image is the training image executed by every worker.
 	// +kubebuilder:default="ai-infra-lab:dev"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="image is immutable"
@@ -33,6 +31,18 @@ type AIJobSpec struct {
 	Args []string `json:"args,omitempty"`
 
 	JobSetOverrides *JobSetOverrides `json:"jobSetOverrides,omitempty"`
+}
+
+// Topology requests a supported node-fabric preference or rack constraint.
+type Topology struct {
+	// Preference asks the scheduler to prefer a GPU fabric when possible.
+	// +kubebuilder:validation:Enum=any;nvlink;pcie
+	// +kubebuilder:default=any
+	Preference string `json:"preference,omitempty"`
+	// Required asks the scheduler or Kueue topology admission to reject non-matching placements.
+	// +kubebuilder:validation:Enum=any;nvlink;pcie;same-rack
+	// +kubebuilder:default=any
+	Required string `json:"required,omitempty"`
 }
 
 type JobSetOverrides struct {

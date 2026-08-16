@@ -37,7 +37,7 @@ func TestGivenAIJobWithSchedulingIntentWhenBuildingDesiredJobSetThenIntentIsCarr
 	assert.Expect(pod.Labels[topology.ExperimentLabel]).To(gomega.Equal("benchmark"))
 }
 
-func TestGivenAIJobArgsWhenBuildingWorkerContainerThenArgsAndCompletionIdentityAreSet(t *testing.T) {
+func TestGivenAIJobArgsWhenBuildingContainerThenArgsAndCompletionIdentityAreSet(t *testing.T) {
 	assert := gomega.NewWithT(t)
 
 	// given
@@ -79,20 +79,54 @@ func TestGivenNoAIJobArgsWhenBuildingWorkerContainerThenArgsRemainUnset(t *testi
 	assert.Expect(job.Spec.Args).To(gomega.BeNil())
 }
 
-func TestGivenSameRackTopologyWhenBuildingDesiredJobSetThenKueueTopologyIsRequired(t *testing.T) {
+func TestGivenSameRackRequiredWhenBuildingJobSetThenKueueTopologyIsRequired(t *testing.T) {
 	assert := gomega.NewWithT(t)
 
 	// given
-	job := testAIJob("same-rack")
+	job := testAIJob("any")
+	job.Spec.Topology.Required = "same-rack"
 
 	// when
 	jobSet := desiredJobSet(job)
 	annotations := jobSet.Spec.ReplicatedJobs[0].Template.Spec.Template.Annotations
 
 	// then
-	assert.Expect(job.Spec.Topology).To(gomega.Equal("same-rack"))
-	assert.Expect(annotations[topology.RequiredTopologyAnnotation]).To(gomega.Equal(topology.RackLabel))
+	assert.Expect(job.Spec.Topology.Required).To(gomega.Equal("same-rack"))
+	assert.Expect(annotations[topology.RequiredTopologyAnnotation]).To(
+		gomega.Equal(topology.RackLabel),
+	)
 	assert.Expect(annotations).NotTo(gomega.HaveKey(topology.PreferenceAnnotation))
+}
+
+func TestGivenRequiredFabricWhenBuildingJobSetThenFilterIntentIsCarried(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
+	job := testAIJob("pcie")
+	job.Spec.Topology.Required = "nvlink"
+
+	// when
+	jobSet := desiredJobSet(job)
+	annotations := jobSet.Spec.ReplicatedJobs[0].Template.Spec.Template.Annotations
+
+	// then
+	assert.Expect(annotations[topology.PreferenceAnnotation]).To(gomega.Equal("pcie"))
+	assert.Expect(annotations[topology.RequiredFabricAnnotation]).To(gomega.Equal("nvlink"))
+	assert.Expect(annotations).NotTo(gomega.HaveKey(topology.RequiredTopologyAnnotation))
+}
+
+func TestGivenAnyTopologyWhenBuildingJobSetThenSchedulingAnnotationsRemainUnset(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
+	job := testAIJob("any")
+
+	// when
+	jobSet := desiredJobSet(job)
+	annotations := jobSet.Spec.ReplicatedJobs[0].Template.Spec.Template.Annotations
+
+	// then
+	assert.Expect(annotations).To(gomega.BeNil())
 }
 
 func TestGivenJobSetOverridesWhenBuildingDesiredJobSetThenPoliciesAreCopied(t *testing.T) {
@@ -262,7 +296,7 @@ func testAIJob(preference string) *aiv1alpha1.AIJob {
 		ObjectMeta: metav1.ObjectMeta{Name: "training", Namespace: "default"},
 		Spec: aiv1alpha1.AIJobSpec{
 			Workers: 4, GPUPerWorker: 2, GPUResource: "nvidia.com/gpu",
-			Topology: preference, Image: "training:v1",
+			Topology: aiv1alpha1.Topology{Preference: preference}, Image: "training:v1",
 		},
 	}
 }

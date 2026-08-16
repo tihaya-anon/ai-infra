@@ -211,8 +211,9 @@ func (r *BenchmarkRunner) createAIJob(
 		},
 		Spec: aiv1alpha1.AIJobSpec{
 			Workers: definition.Workers, GPUPerWorker: definition.GPUPerWorker,
-			GPUResource: string(topology.GPUResource), Topology: "any",
-			Image: "ai-infra-lab:dev", Args: append([]string(nil), definition.Args...),
+			GPUResource: string(topology.GPUResource),
+			Topology:    aiv1alpha1.Topology{Preference: "any"},
+			Image:       "ai-infra-lab:dev", Args: append([]string(nil), definition.Args...),
 		},
 	}
 	if err := r.cluster.Client.Create(ctx, job); err != nil {

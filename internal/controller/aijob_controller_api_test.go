@@ -85,8 +85,9 @@ func apiTestAIJob(key types.NamespacedName) *aiv1alpha1.AIJob {
 			Labels: map[string]string{topology.QueueLabel: "training"},
 		},
 		Spec: aiv1alpha1.AIJobSpec{
-			Workers: 2, GPUPerWorker: 1, Topology: "nvlink",
-			Image: "worker:test", Args: []string{"--mode=complete", "--duration=1s"},
+			Workers: 2, GPUPerWorker: 1,
+			Topology: aiv1alpha1.Topology{Preference: "nvlink"},
+			Image:    "worker:test", Args: []string{"--mode=complete", "--duration=1s"},
 		},
 	}
 }

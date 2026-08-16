@@ -157,14 +157,28 @@
           "type": "object"
         },
         "topology": {
-          "default": "any",
-          "enum": [
-            "any",
-            "nvlink",
-            "pcie",
-            "same-rack"
-          ],
-          "type": "string",
+          "properties": {
+            "preference": {
+              "default": "any",
+              "enum": [
+                "any",
+                "nvlink",
+                "pcie"
+              ],
+              "type": "string"
+            },
+            "required": {
+              "default": "any",
+              "enum": [
+                "any",
+                "nvlink",
+                "pcie",
+                "same-rack"
+              ],
+              "type": "string"
+            }
+          },
+          "type": "object",
           "x-kubernetes-validations": [
             {
               "message": "topology is immutable",

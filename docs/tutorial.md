@@ -19,7 +19,8 @@ spec:
   workers: 4
   gpuPerWorker: 2
   gpuResource: nvidia.com/gpu
-  topology: nvlink
+  topology:
+    preference: nvlink
   image: registry.example.com/training:v1
   args: ["--mode=complete", "--duration=30s"]
 ```
@@ -29,7 +30,8 @@ spec:
 - `workers`：分布式训练的 Worker 数量；
 - `gpuPerWorker`：每个 Worker 请求的 GPU 数量；
 - `gpuResource`：Device Plugin 或 DRA 暴露的资源名；
-- `topology`：实验中的 `nvlink`、`pcie` 或 `same-rack`；
+- `topology.preference`：实验中的软拓扑偏好，支持 `nvlink`、`pcie` 或 `any`；
+- `topology.required`：实验中的硬拓扑约束，支持 `nvlink`、`pcie`、`same-rack` 或 `any`；
 - `image`：训练镜像；
 - `args`：按声明顺序原样传给 Worker 容器；省略时保持长驻等待的兼容行为；
 - `kueue.x-k8s.io/queue-name`：任务进入的 LocalQueue。
