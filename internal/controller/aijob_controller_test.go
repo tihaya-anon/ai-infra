@@ -1,108 +1,179 @@
 package controller
 
 import (
-	"reflect"
 	"testing"
 
+	"github.com/onsi/gomega"
 	aiv1alpha1 "github.com/tihaya-anon/ai-infra-lab/api/v1alpha1"
 	"github.com/tihaya-anon/ai-infra-lab/internal/topology"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	jobsetv1alpha2 "sigs.k8s.io/jobset/api/jobset/v1alpha2"
 )
 
-func TestDesiredJobSetCarriesSchedulingIntent(t *testing.T) {
+func TestGivenAIJobWithSchedulingIntentWhenBuildingDesiredJobSetThenIntentIsCarried(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	job := testAIJob("nvlink")
 	job.Labels = map[string]string{
 		topology.QueueLabel: "training", topology.RunIDLabel: "run-1",
 		topology.ExperimentLabel: "benchmark",
 	}
 
+	// when
 	jobSet := desiredJobSet(job)
 	worker := jobSet.Spec.ReplicatedJobs[0].Template.Spec
 	pod := worker.Template
+	gpuLimit := pod.Spec.Containers[0].Resources.Limits["nvidia.com/gpu"]
 
-	if got := jobSet.Labels[topology.QueueLabel]; got != "training" {
-		t.Fatalf("got queue %q, want training", got)
-	}
-	if worker.Parallelism == nil || *worker.Parallelism != 4 {
-		t.Fatalf("got parallelism %v, want 4", worker.Parallelism)
-	}
-	if pod.Spec.SchedulerName != SchedulerName {
-		t.Fatalf("got scheduler %q, want %q", pod.Spec.SchedulerName, SchedulerName)
-	}
-	if got := pod.Annotations[topology.PreferenceAnnotation]; got != "nvlink" {
-		t.Fatalf("got topology %q, want nvlink", got)
-	}
-	if got := pod.Spec.Containers[0].Resources.Limits["nvidia.com/gpu"]; got.Value() != 2 {
-		t.Fatalf("got GPU limit %s, want 2", got.String())
-	}
-	if jobSet.Labels[topology.RunIDLabel] != "run-1" ||
-		pod.Labels[topology.ExperimentLabel] != "benchmark" {
-		t.Fatalf("lab labels were not propagated: JobSet=%#v Pod=%#v", jobSet.Labels, pod.Labels)
-	}
+	// then
+	assert.Expect(jobSet.Labels[topology.QueueLabel]).To(gomega.Equal("training"))
+	assert.Expect(worker.Parallelism).NotTo(gomega.BeNil())
+	assert.Expect(*worker.Parallelism).To(gomega.Equal(int32(4)))
+	assert.Expect(pod.Spec.SchedulerName).To(gomega.Equal(SchedulerName))
+	assert.Expect(pod.Annotations[topology.PreferenceAnnotation]).To(gomega.Equal("nvlink"))
+	assert.Expect(gpuLimit.Value()).To(gomega.Equal(int64(2)))
+	assert.Expect(jobSet.Labels[topology.RunIDLabel]).To(gomega.Equal("run-1"))
+	assert.Expect(pod.Labels[topology.ExperimentLabel]).To(gomega.Equal("benchmark"))
 }
 
-func TestWorkerArgumentsAndCompletionIdentity(t *testing.T) {
+func TestGivenAIJobArgsWhenBuildingWorkerContainerThenArgsAndCompletionIdentityAreSet(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	job := testAIJob("any")
 	job.Spec.Args = []string{"--mode=complete", "--duration=2s", "--fail-indexes=1,3"}
-
-	container := workerContainer(job)
 	wantArgs := []string{"--mode=complete", "--duration=2s", "--fail-indexes=1,3"}
-	if !reflect.DeepEqual(container.Args, wantArgs) {
-		t.Fatalf("got args %#v, want %#v", container.Args, wantArgs)
-	}
-	if len(container.Env) != 1 || container.Env[0].Name != "JOB_COMPLETION_INDEX" {
-		t.Fatalf("unexpected completion identity env: %#v", container.Env)
-	}
+
+	// when
+	container := workerContainer(job)
 	fieldRef := container.Env[0].ValueFrom.FieldRef
-	if fieldRef == nil || fieldRef.FieldPath !=
-		"metadata.labels['batch.kubernetes.io/job-completion-index']" {
-		t.Fatalf("unexpected completion identity field ref: %#v", fieldRef)
-	}
 
+	// then
+	assert.Expect(container.Args).To(gomega.Equal(wantArgs))
+	assert.Expect(container.Env).To(gomega.HaveLen(1))
+	assert.Expect(container.Env[0].Name).To(gomega.Equal("JOB_COMPLETION_INDEX"))
+	assert.Expect(fieldRef).NotTo(gomega.BeNil())
+	assert.Expect(fieldRef.FieldPath).To(
+		gomega.Equal("metadata.labels['batch.kubernetes.io/job-completion-index']"),
+	)
+
+	// when
 	container.Args[0] = "changed"
-	if job.Spec.Args[0] != "--mode=complete" {
-		t.Fatal("worker container shares the AIJob args backing array")
-	}
+
+	// then
+	assert.Expect(job.Spec.Args[0]).To(gomega.Equal("--mode=complete"))
 }
 
-func TestWorkerArgumentsRemainOmitted(t *testing.T) {
-	container := workerContainer(testAIJob("any"))
-	if container.Args != nil {
-		t.Fatalf("got args %#v, want nil", container.Args)
-	}
+func TestGivenNoAIJobArgsWhenBuildingWorkerContainerThenArgsRemainUnset(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
+	job := testAIJob("any")
+
+	// when
+	container := workerContainer(job)
+
+	// then
+	assert.Expect(container.Args).To(gomega.BeNil())
+	assert.Expect(job.Spec.Args).To(gomega.BeNil())
 }
 
-func TestSameRackUsesKueueTopology(t *testing.T) {
-	jobSet := desiredJobSet(testAIJob("same-rack"))
+func TestGivenSameRackTopologyWhenBuildingDesiredJobSetThenKueueTopologyIsRequired(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
+	job := testAIJob("same-rack")
+
+	// when
+	jobSet := desiredJobSet(job)
 	annotations := jobSet.Spec.ReplicatedJobs[0].Template.Spec.Template.Annotations
 
-	if got := annotations[topology.RequiredTopologyAnnotation]; got != topology.RackLabel {
-		t.Fatalf("got required topology %q, want %q", got, topology.RackLabel)
-	}
-	if _, exists := annotations[topology.PreferenceAnnotation]; exists {
-		t.Fatal("same-rack must be handled by Kueue, not the node score plugin")
-	}
+	// then
+	assert.Expect(job.Spec.Topology).To(gomega.Equal("same-rack"))
+	assert.Expect(annotations[topology.RequiredTopologyAnnotation]).To(gomega.Equal(topology.RackLabel))
+	assert.Expect(annotations).NotTo(gomega.HaveKey(topology.PreferenceAnnotation))
 }
 
-func TestReconcileOwnedFieldsPreservesOtherControllersFields(t *testing.T) {
+func TestGivenJobSetOverridesWhenBuildingDesiredJobSetThenPoliciesAreCopied(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
+	job := testAIJob("any")
+	job.Spec.JobSetOverrides = &aiv1alpha1.JobSetOverrides{
+		FailurePolicy: &jobsetv1alpha2.FailurePolicy{
+			MaxRestarts: 2,
+			Rules: []jobsetv1alpha2.FailurePolicyRule{{
+				Name:   "retry-workers",
+				Action: jobsetv1alpha2.RestartJobSet,
+			}},
+		},
+		SuccessPolicy: &jobsetv1alpha2.SuccessPolicy{
+			Operator: jobsetv1alpha2.OperatorAll,
+		},
+	}
+
+	// when
+	jobSet := desiredJobSet(job)
+
+	// then
+	assert.Expect(jobSet.Spec.FailurePolicy).To(gomega.Equal(job.Spec.JobSetOverrides.FailurePolicy))
+	assert.Expect(jobSet.Spec.SuccessPolicy).To(gomega.Equal(job.Spec.JobSetOverrides.SuccessPolicy))
+}
+
+func TestGivenNoJobSetOverridesWhenBuildingDesiredJobSetThenPoliciesRemainUnset(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
+	job := testAIJob("any")
+
+	// when
+	jobSet := desiredJobSet(job)
+
+	// then
+	assert.Expect(jobSet.Spec.FailurePolicy).To(gomega.BeNil())
+	assert.Expect(jobSet.Spec.SuccessPolicy).To(gomega.BeNil())
+}
+
+func TestGivenDesiredPoliciesWhenCreatingOwnedJobSetThenImmutablePoliciesAreInitialized(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
+	desired := desiredJobSet(testAIJob("any"))
+	desired.Spec.FailurePolicy = &jobsetv1alpha2.FailurePolicy{MaxRestarts: 1}
+	desired.Spec.SuccessPolicy = &jobsetv1alpha2.SuccessPolicy{Operator: jobsetv1alpha2.OperatorAll}
+	actual := &jobsetv1alpha2.JobSet{}
+
+	// when
+	reconcileOwnedFields(actual, desired)
+
+	// then
+	assert.Expect(actual.Spec.FailurePolicy).To(gomega.Equal(desired.Spec.FailurePolicy))
+	assert.Expect(actual.Spec.SuccessPolicy).To(gomega.Equal(desired.Spec.SuccessPolicy))
+}
+
+func TestGivenExistingLabelsWhenReconcilingOwnedFieldsThenExternalLabelsArePreserved(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	actual := &jobsetv1alpha2.JobSet{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
 		"jobset.x-k8s.io/internal": "keep",
 		topology.QueueLabel:        "old-queue",
 	}}}
 	desired := desiredJobSet(testAIJob("any"))
 
+	// when
 	reconcileOwnedFields(actual, desired)
 
-	if got := actual.Labels["jobset.x-k8s.io/internal"]; got != "keep" {
-		t.Fatalf("got external label %q, want keep", got)
-	}
-	if _, exists := actual.Labels[topology.QueueLabel]; exists {
-		t.Fatal("queue label should be removed when AIJob no longer selects a queue")
-	}
+	// then
+	assert.Expect(actual.Labels["jobset.x-k8s.io/internal"]).To(gomega.Equal("keep"))
+	assert.Expect(actual.Labels).NotTo(gomega.HaveKey(topology.QueueLabel))
 }
 
-func TestReconcileOwnedFieldsDoesNotOverwriteDefaultedSpec(t *testing.T) {
+func TestGivenExistingJobSetWhenReconcilingOwnedFieldsThenDefaultedSpecIsPreserved(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	created := metav1.Now()
 	actual := &jobsetv1alpha2.JobSet{
 		ObjectMeta: metav1.ObjectMeta{CreationTimestamp: created},
@@ -115,37 +186,47 @@ func TestReconcileOwnedFieldsDoesNotOverwriteDefaultedSpec(t *testing.T) {
 	}
 	desired := desiredJobSet(testAIJob("nvlink"))
 
+	// when
 	reconcileOwnedFields(actual, desired)
 
-	if actual.Spec.Network.PublishNotReadyAddresses == nil ||
-		!*actual.Spec.Network.PublishNotReadyAddresses {
-		t.Fatal("webhook-defaulted network fields must be preserved after creation")
-	}
-	if actual.Spec.ReplicatedJobs != nil {
-		t.Fatal("existing spec must not be replaced during reconciliation")
-	}
+	// then
+	assert.Expect(actual.Spec.Network.PublishNotReadyAddresses).NotTo(gomega.BeNil())
+	assert.Expect(*actual.Spec.Network.PublishNotReadyAddresses).To(gomega.BeTrue())
+	assert.Expect(actual.Spec.ReplicatedJobs).To(gomega.BeNil())
+	assert.Expect(actual.Spec.FailurePolicy).To(gomega.BeNil())
+	assert.Expect(actual.Spec.SuccessPolicy).To(gomega.BeNil())
 }
 
-func TestStatusFromJobSet(t *testing.T) {
+func TestGivenJobSetConditionsWhenProjectingStatusThenConditionsUseAIJobGeneration(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	jobSet := &jobsetv1alpha2.JobSet{Status: jobsetv1alpha2.JobSetStatus{
 		ReplicatedJobsStatus: []jobsetv1alpha2.ReplicatedJobStatus{{Ready: 2, Active: 2, Succeeded: 1}},
 		Conditions:           []metav1.Condition{{Type: "Completed", Status: metav1.ConditionFalse}},
 	}}
 
+	// when
 	status := statusFromJobSet(7, jobSet)
-	if status.ObservedGeneration != 7 {
-		t.Fatalf("unexpected status: %+v", status)
-	}
-	if got := status.Conditions[0].ObservedGeneration; got != 7 {
-		t.Fatalf("got condition generation %d, want 7", got)
-	}
+
+	// then
+	assert.Expect(status.ObservedGeneration).To(gomega.Equal(int64(7)))
+	assert.Expect(status.Conditions).To(gomega.HaveLen(1))
+	assert.Expect(status.Conditions[0].ObservedGeneration).To(gomega.Equal(int64(7)))
 }
 
-func TestStatusFromJobSetKeepsEmptyConditionsNil(t *testing.T) {
-	status := statusFromJobSet(3, &jobsetv1alpha2.JobSet{})
-	if status.Conditions != nil {
-		t.Fatalf("got conditions %#v, want nil", status.Conditions)
-	}
+func TestGivenJobSetWithoutConditionsWhenProjectingStatusThenConditionsRemainUnset(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
+	jobSet := &jobsetv1alpha2.JobSet{}
+
+	// when
+	status := statusFromJobSet(3, jobSet)
+
+	// then
+	assert.Expect(jobSet.Status.Conditions).To(gomega.BeNil())
+	assert.Expect(status.Conditions).To(gomega.BeNil())
 }
 
 func testAIJob(preference string) *aiv1alpha1.AIJob {

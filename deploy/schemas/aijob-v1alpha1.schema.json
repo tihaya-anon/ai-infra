@@ -1,0 +1,213 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "apiVersion": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "spec": {
+      "properties": {
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "gpuPerWorker": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "gpuResource": {
+          "default": "example.com/gpu",
+          "type": "string"
+        },
+        "image": {
+          "default": "ai-infra-lab:dev",
+          "type": "string"
+        },
+        "jobSetOverrides": {
+          "properties": {
+            "failurePolicy": {
+              "properties": {
+                "maxRestarts": {
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "restartStrategy": {
+                  "default": "Recreate",
+                  "enum": [
+                    "Recreate",
+                    "BlockingRecreate"
+                  ],
+                  "type": "string"
+                },
+                "rules": {
+                  "items": {
+                    "properties": {
+                      "action": {
+                        "enum": [
+                          "FailJobSet",
+                          "RestartJobSet",
+                          "RestartJobSetAndIgnoreMaxRestarts"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "onJobFailureMessagePatterns": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "onJobFailureReasons": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "targetReplicatedJobs": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array",
+                        "x-kubernetes-list-type": "atomic"
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            "successPolicy": {
+              "properties": {
+                "operator": {
+                  "enum": [
+                    "All",
+                    "Any"
+                  ],
+                  "type": "string"
+                },
+                "targetReplicatedJobs": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "x-kubernetes-list-type": "atomic"
+                }
+              },
+              "required": [
+                "operator"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "topology": {
+          "default": "any",
+          "enum": [
+            "any",
+            "nvlink",
+            "pcie",
+            "same-rack"
+          ],
+          "type": "string"
+        },
+        "workers": {
+          "format": "int32",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "gpuPerWorker",
+        "workers"
+      ],
+      "type": "object",
+      "x-kubernetes-validations": [
+        {
+          "message": "AIJob spec is immutable; recreate the AIJob to change the workload",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "status": {
+      "properties": {
+        "conditions": {
+          "items": {
+            "properties": {
+              "lastTransitionTime": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "message": {
+                "maxLength": 32768,
+                "type": "string"
+              },
+              "observedGeneration": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "reason": {
+                "maxLength": 1024,
+                "minLength": 1,
+                "pattern": "^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "True",
+                  "False",
+                  "Unknown"
+                ],
+                "type": "string"
+              },
+              "type": {
+                "maxLength": 316,
+                "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "lastTransitionTime",
+              "message",
+              "reason",
+              "status",
+              "type"
+            ],
+            "type": "object"
+          },
+          "type": "array",
+          "x-kubernetes-list-map-keys": [
+            "type"
+          ],
+          "x-kubernetes-list-type": "map"
+        },
+        "observedGeneration": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "spec"
+  ],
+  "type": "object"
+}

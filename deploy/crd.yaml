@@ -52,6 +52,65 @@ spec:
               image:
                 default: ai-infra-lab:dev
                 type: string
+              jobSetOverrides:
+                properties:
+                  failurePolicy:
+                    properties:
+                      maxRestarts:
+                        format: int32
+                        type: integer
+                      restartStrategy:
+                        default: Recreate
+                        enum:
+                        - Recreate
+                        - BlockingRecreate
+                        type: string
+                      rules:
+                        items:
+                          properties:
+                            action:
+                              enum:
+                              - FailJobSet
+                              - RestartJobSet
+                              - RestartJobSetAndIgnoreMaxRestarts
+                              type: string
+                            name:
+                              type: string
+                            onJobFailureMessagePatterns:
+                              items:
+                                type: string
+                              type: array
+                            onJobFailureReasons:
+                              items:
+                                type: string
+                              type: array
+                            targetReplicatedJobs:
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          required:
+                          - action
+                          - name
+                          type: object
+                        type: array
+                    type: object
+                  successPolicy:
+                    properties:
+                      operator:
+                        enum:
+                        - All
+                        - Any
+                        type: string
+                      targetReplicatedJobs:
+                        items:
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: atomic
+                    required:
+                    - operator
+                    type: object
+                type: object
               topology:
                 default: any
                 enum:

@@ -26,6 +26,7 @@ generate: tools
 	trap 'rm -rf "$$tmp_dir"' EXIT; \
 	$(CONTROLLER_GEN) crd:maxDescLen=0 paths=./api/... output:crd:dir="$$tmp_dir"; \
 	cp "$$tmp_dir/infra.example.io_aijobs.yaml" deploy/crd.yaml
+	go run ./scripts/sync-aijob-schema.go
 	$(GOIMPORTS) -w ./api
 
 fmt:

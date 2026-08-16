@@ -129,8 +129,7 @@ func desiredJobSet(job *aiv1alpha1.AIJob) *jobsetv1alpha2.JobSet {
 	if queue := job.Labels[topology.QueueLabel]; queue != "" {
 		labels[topology.QueueLabel] = queue
 	}
-
-	return &jobsetv1alpha2.JobSet{
+	jobSet := &jobsetv1alpha2.JobSet{
 		ObjectMeta: metav1.ObjectMeta{Name: job.Name, Namespace: job.Namespace, Labels: labels},
 		Spec: jobsetv1alpha2.JobSetSpec{
 			Network: &jobsetv1alpha2.Network{EnableDNSHostnames: boolPtr(true)},
@@ -144,31 +143,33 @@ func desiredJobSet(job *aiv1alpha1.AIJob) *jobsetv1alpha2.JobSet {
 			}},
 		},
 	}
+	if job.Spec.JobSetOverrides != nil {
+		jobSet.Spec.FailurePolicy = job.Spec.JobSetOverrides.FailurePolicy
+		jobSet.Spec.SuccessPolicy = job.Spec.JobSetOverrides.SuccessPolicy
+	}
+	return jobSet
 }
 
 // reconcileOwnedFields initializes immutable spec fields only when creating the
 // JobSet. Webhooks and Kueue may default or inject fields into that spec later.
 func reconcileOwnedFields(actual, desired *jobsetv1alpha2.JobSet) {
 	if actual.Labels == nil {
-		actual.Labels = make(map[string]string, 2)
+		actual.Labels = make(map[string]string, 3)
 	}
 	actual.Labels[topology.JobLabel] = desired.Labels[topology.JobLabel]
-	for _, key := range []string{topology.RunIDLabel, topology.ExperimentLabel} {
+	for _, key := range []string{topology.RunIDLabel, topology.ExperimentLabel, topology.QueueLabel} {
 		if value := desired.Labels[key]; value != "" {
 			actual.Labels[key] = value
 		} else {
 			delete(actual.Labels, key)
 		}
 	}
-	if queue := desired.Labels[topology.QueueLabel]; queue != "" {
-		actual.Labels[topology.QueueLabel] = queue
-	} else {
-		delete(actual.Labels, topology.QueueLabel)
-	}
 
 	if actual.CreationTimestamp.IsZero() {
 		actual.Spec.ReplicatedJobs = desired.Spec.ReplicatedJobs
 		actual.Spec.Network = desired.Spec.Network
+		actual.Spec.FailurePolicy = desired.Spec.FailurePolicy
+		actual.Spec.SuccessPolicy = desired.Spec.SuccessPolicy
 	}
 }
 
