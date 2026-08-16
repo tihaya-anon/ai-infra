@@ -4,15 +4,17 @@ KIND_NODE_IMAGE ?= m.daocloud.io/docker.io/kindest/node:v1.34.8@sha256:02722c2de
 GO_BUILDER_IMAGE ?= m.daocloud.io/docker.io/library/golang:1.24.0
 GOPROXY ?= https://goproxy.cn,direct
 RUNTIME_IMAGE ?= m.daocloud.io/gcr.io/distroless/static-debian12:nonroot
+EXTERNAL_IMAGE_MIRROR ?= m.daocloud.io
+KIND_IMAGE_PLATFORM ?=
 HEADLAMP_NAMESPACE ?= kube-system
 HEADLAMP_ADMIN_SERVICE_ACCOUNT ?= headlamp-admin
-JOBSET_VERSION ?= v0.10.1
-KUEUE_VERSION ?= v0.14.3
+JOBSET_IMAGE ?= registry.k8s.io/jobset/jobset:v0.10.1
+KUEUE_IMAGE ?= registry.k8s.io/kueue/kueue:v0.14.3
 GOIMPORTS := ./scripts/goimports.sh
 CONTROLLER_GEN := ./scripts/controller-gen.sh
 ENVTEST_K8S_VERSION ?= 1.34.0
 
-.PHONY: tools generate fmt fmt-check line-length vet test test-api test-e2e verify hooks build image cluster deploy demo headlamp headlamp-token headlamp-port-forward benchmark benchmark-validate failure-capacity failure-worker failure-restart clean
+.PHONY: tools generate fmt fmt-check line-length vet test test-api test-e2e verify hooks build image cluster preload-external-images deploy demo headlamp headlamp-token headlamp-port-forward benchmark benchmark-validate failure-capacity failure-worker failure-restart clean
 
 tools:
 	$(GOIMPORTS) --install
@@ -65,11 +67,14 @@ image:
 cluster:
 	kind create cluster --name $(CLUSTER) --image $(KIND_NODE_IMAGE) --config kind.yaml
 
-deploy: image
+preload-external-images:
+	CLUSTER=$(CLUSTER) KIND_IMAGE_PLATFORM=$(KIND_IMAGE_PLATFORM) KIND_IMAGE_MIRROR_PREFIX=$(EXTERNAL_IMAGE_MIRROR) ./scripts/load-kind-images.sh $(JOBSET_IMAGE) $(KUEUE_IMAGE)
+
+deploy: image preload-external-images
 	kind load docker-image $(IMAGE) --name $(CLUSTER)
-	kubectl apply --server-side -f https://github.com/kubernetes-sigs/jobset/releases/download/$(JOBSET_VERSION)/manifests.yaml
+	kubectl apply --server-side -k deploy/dependencies/jobset
 	kubectl -n jobset-system rollout status deployment/jobset-controller-manager --timeout=180s
-	kubectl apply --server-side -f https://github.com/kubernetes-sigs/kueue/releases/download/$(KUEUE_VERSION)/manifests.yaml
+	kubectl apply --server-side -k deploy/dependencies/kueue
 	kubectl -n kueue-system rollout status deployment/kueue-controller-manager --timeout=180s
 	kubectl apply -f deploy/crd.yaml
 	kubectl apply -f deploy/rbac.yaml

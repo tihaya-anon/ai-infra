@@ -20,7 +20,7 @@ need_cmd() {
 
 require_cmds() {
   local missing=0
-  for cmd in curl docker kind kubectl sed; do
+  for cmd in curl kubectl sed; do
     if ! need_cmd "$cmd"; then
       echo "missing required command: $cmd" >&2
       missing=1
@@ -32,32 +32,8 @@ require_cmds() {
 }
 
 load_image_into_kind() {
-  if ! kind get clusters | grep -Fxq "$CLUSTER"; then
-    log "Skipping kind image preload; cluster ${CLUSTER} was not found"
-    return
-  fi
-
-  log "Pulling Headlamp image on the host"
-  docker pull "$HEADLAMP_IMAGE"
-
   log "Loading Headlamp image into kind cluster ${CLUSTER}"
-  if kind load docker-image "$HEADLAMP_IMAGE" --name "$CLUSTER"; then
-    return
-  fi
-
-  log "Falling back to direct containerd import for each kind node"
-  local archive
-  archive="$(mktemp -t ai-infra-headlamp.XXXXXX.tar)"
-  docker save "$HEADLAMP_IMAGE" -o "$archive"
-
-  local node
-  while IFS= read -r node; do
-    docker exec --privileged -i "$node" \
-      ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs - <"$archive"
-  done < <(docker ps \
-    --filter "label=io.x-k8s.kind.cluster=${CLUSTER}" \
-    --format '{{.Names}}')
-  rm -f "$archive"
+  CLUSTER="$CLUSTER" KIND_IMAGE_MIRROR_PREFIX= "${repo_root}/scripts/load-kind-images.sh" "$HEADLAMP_IMAGE"
 }
 
 apply_headlamp() {
