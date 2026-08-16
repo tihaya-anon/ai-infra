@@ -30,16 +30,16 @@ type AIJobStatus struct {
 // +kubebuilder:object:root=true
 type AIJob struct {
 	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
+	metav1.ObjectMeta `json:"metadata"`
 
-	Spec   AIJobSpec   `json:"spec,omitempty"`
-	Status AIJobStatus `json:"status,omitempty"`
+	Spec   AIJobSpec   `json:"spec"`
+	Status AIJobStatus `json:"status"`
 }
 
 // AIJobList contains a list of AIJobs.
 // +kubebuilder:object:root=true
 type AIJobList struct {
 	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
+	metav1.ListMeta `json:"metadata"`
 	Items           []AIJob `json:"items"`
 }
