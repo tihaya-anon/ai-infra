@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Kueue v1beta1 resources used by deploy/kueue-resources.yaml.",
+  "anyOf": [
+    {
+      "$ref": "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/kueue.x-k8s.io/topology_v1beta1.json"
+    },
+    {
+      "$ref": "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/kueue.x-k8s.io/resourceflavor_v1beta1.json"
+    },
+    {
+      "$ref": "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/kueue.x-k8s.io/clusterqueue_v1beta1.json"
+    },
+    {
+      "$ref": "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/kueue.x-k8s.io/localqueue_v1beta1.json"
+    }
+  ]
+}
