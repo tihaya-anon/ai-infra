@@ -1,89 +1,125 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/yannh/kubernetes-json-schema/master/v1.34.1-standalone-strict/all.json
+---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
   name: aijobs.infra.example.io
 spec:
   group: infra.example.io
-  scope: Namespaced
   names:
-    plural: aijobs
-    singular: aijob
     kind: AIJob
-    shortNames: [aijob]
+    listKind: AIJobList
+    plural: aijobs
+    shortNames:
+    - aijob
+    singular: aijob
+  scope: Namespaced
   versions:
-    - name: v1alpha1
-      served: true
-      storage: true
-      subresources:
-        status: {}
-      additionalPrinterColumns:
-        - name: Workers
-          type: integer
-          jsonPath: .spec.workers
-        - name: Completed
-          type: string
-          jsonPath: .status.conditions[?(@.type=="Completed")].status
-        - name: Failed
-          type: string
-          jsonPath: .status.conditions[?(@.type=="Failed")].status
-      schema:
-        openAPIV3Schema:
-          type: object
-          properties:
-            spec:
-              type: object
-              x-kubernetes-validations:
-                - rule: self == oldSelf
-                  message: AIJob spec is immutable; recreate the AIJob to change the workload
-              required: [workers, gpuPerWorker]
-              properties:
-                workers:
-                  type: integer
-                  minimum: 1
-                gpuPerWorker:
-                  type: integer
-                  minimum: 1
-                gpuResource:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.workers
+      name: Workers
+      type: integer
+    - jsonPath: .status.conditions[?(@.type=="Completed")].status
+      name: Completed
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Failed")].status
+      name: Failed
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              args:
+                items:
                   type: string
-                  default: example.com/gpu
-                topology:
-                  type: string
-                  enum: [any, nvlink, pcie, same-rack]
-                  default: any
-                image:
-                  type: string
-                  default: ai-infra-lab:dev
-                args:
-                  type: array
-                  items:
-                    type: string
-            status:
-              type: object
-              properties:
-                observedGeneration:
-                  type: integer
-                  format: int64
-                conditions:
-                  type: array
-                  x-kubernetes-list-type: map
-                  x-kubernetes-list-map-keys: [type]
-                  items:
-                    type: object
-                    required: [lastTransitionTime, message, reason, status, type]
-                    properties:
-                      type:
-                        type: string
-                      status:
-                        type: string
-                        enum: ["True", "False", Unknown]
-                      observedGeneration:
-                        type: integer
-                        format: int64
-                      lastTransitionTime:
-                        type: string
-                        format: date-time
-                      reason:
-                        type: string
-                      message:
-                        type: string
+                type: array
+              gpuPerWorker:
+                format: int64
+                minimum: 1
+                type: integer
+              gpuResource:
+                default: example.com/gpu
+                type: string
+              image:
+                default: ai-infra-lab:dev
+                type: string
+              topology:
+                default: any
+                enum:
+                - any
+                - nvlink
+                - pcie
+                - same-rack
+                type: string
+              workers:
+                format: int32
+                minimum: 1
+                type: integer
+            required:
+            - gpuPerWorker
+            - workers
+            type: object
+            x-kubernetes-validations:
+            - message: AIJob spec is immutable; recreate the AIJob to change the workload
+              rule: self == oldSelf
+          status:
+            properties:
+              conditions:
+                items:
+                  properties:
+                    lastTransitionTime:
+                      format: date-time
+                      type: string
+                    message:
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                format: int64
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

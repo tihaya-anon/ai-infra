@@ -10,6 +10,9 @@ for file in "$@"; do
     fi
 
     if ! awk -v max="$max_length" '
+        /^[[:space:]]*\/\/ \+kubebuilder:/ {
+            next
+        }
         length($0) > max {
             printf "%s:%d: line is %d characters; limit is %d\n", FILENAME, FNR, length($0), max
             failed = 1

@@ -829,6 +829,59 @@ metadata:
 
 ## 七、AIJob Controller 的目标形态
 
+Controller-runtime 需要先知道“Go 里的 struct”和“Kubernetes API 里的资源身份”如何对应。这个对应关系由
+`runtime.Scheme` 保存：
+
+```mermaid
+flowchart TD
+    YAML[YAML<br/>apiVersion + kind] --> API[API Server<br/>Kubernetes API 对象]
+    API --> Client[controller-runtime client/cache<br/>List Watch Get]
+    Client --> Scheme[runtime.Scheme<br/>类型映射表]
+    Scheme --> Go[Go struct<br/>AIJob JobSet Pod]
+
+    Go --> Write[client 写回 API Server]
+    Scheme --> Owner[OwnerReference<br/>apiVersion kind uid]
+```
+
+`apiVersion` 和 `kind` 是对象在 Kubernetes API 中的身份；`runtime.Scheme` 则是 Controller
+进程内的类型字典。它回答的是：
+
+| Kubernetes API 身份 | Go 类型 |
+| --- | --- |
+| `infra.example.io/v1alpha1` + `AIJob` | `aiv1alpha1.AIJob` |
+| `jobset.x-k8s.io/v1alpha2` + `JobSet` | `jobsetv1alpha2.JobSet` |
+| `batch/v1` + `Job` | `batchv1.Job` |
+| `v1` + `Pod` | `corev1.Pod` |
+
+因此 `cmd/controller/main.go` 启动时会把内置类型、AIJob 和 JobSet 加进同一个 Scheme。之后
+Controller-runtime 才能把 API Server 里的对象解码成正确的 Go struct，也能在需要写
+`OwnerReference` 时知道某个 Go 对象对应的 `apiVersion` 和 `kind`。
+
+本项目采用 code-first 维护 `AIJob` API：Go 类型和 kubebuilder marker 是源头，
+`deploy/crd.yaml` 是生成物。这样读源码时先看 `api/v1alpha1/aijob_types.go`，就能同时看到
+Controller 使用的字段、API Server 校验、默认值、打印列和 status 子资源配置。
+
+```mermaid
+flowchart TD
+    Types[api/v1alpha1/aijob_types.go<br/>Go 字段和 kubebuilder markers]
+    Generate[make generate<br/>controller-gen object + crd]
+    Deepcopy[zz_generated.deepcopy.go<br/>runtime.Object 深拷贝]
+    CRD[deploy/crd.yaml<br/>CustomResourceDefinition]
+    API[API Server<br/>注册 AIJob 资源和 schema]
+    Scheme[AddToScheme<br/>注册 Go 类型和 GVK]
+    Reconciler[AIJobReconciler<br/>typed client 读写对象]
+
+    Types --> Generate
+    Generate --> Deepcopy
+    Generate --> CRD
+    CRD --> API
+    Types --> Scheme
+    Scheme --> Reconciler
+```
+
+修改 `AIJob.spec` 时，不应手改生成后的 CRD 再反推 Go 代码；应先改 Go 类型和 marker，然后运行
+`make generate`。部署时 API Server 仍然只接收生成后的 CRD YAML，只是这个 YAML 现在由代码稳定生成。
+
 入口声明它管理 AIJob，并监听自己创建的 JobSet：
 
 ```go
@@ -1015,7 +1068,7 @@ JobSet 和 Kueue 控制器镜像也会在安装官方清单前预加载到 kind 
 
 | 文件 | 创建什么 | 怎么理解 |
 | --- | --- | --- |
-| `deploy/crd.yaml` | `CustomResourceDefinition/aijobs.infra.example.io` | 向 API Server 注册新的资源类型 `AIJob`。注册后，用户才可以提交 `kind: AIJob` 的 YAML。 |
+| `deploy/crd.yaml` | `CustomResourceDefinition/aijobs.infra.example.io` | 由 `api/v1alpha1/aijob_types.go` 生成，向 API Server 注册新的资源类型 `AIJob`。注册后，用户才可以提交 `kind: AIJob` 的 YAML。 |
 | `deploy/rbac.yaml` | Namespace、ServiceAccount、ClusterRole、RoleBinding 等 | 给 Controller 和自定义 Scheduler 准备运行身份与权限。 |
 | `deploy/kueue-resources.yaml` | `Topology`、`ResourceFlavor`、`ClusterQueue`、`LocalQueue` | 创建 Kueue 的自定义资源实例。它们的 CRD 已经由前面的 Kueue 安装步骤提供。 |
 | `deploy/controller.yaml` | `Deployment/aijob-controller` 和 metrics `Service` | 在集群里启动 `/controller` 进程。这个进程 watch `AIJob`，并创建/更新 JobSet。 |

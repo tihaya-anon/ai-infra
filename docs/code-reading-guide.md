@@ -19,8 +19,8 @@ AIJob YAML
 
 1. [`examples/aijob.yaml`](../examples/aijob.yaml)：最小的业务输入。先记住 `workers`、
    `gpuPerWorker`、`topology`、有序 `args` 和队列 Label，后续查它们分别被谁消费。
-2. [`deploy/crd.yaml`](../deploy/crd.yaml)：API Server 看到的 `AIJob` 契约，包括字段校验、默认值、不可变规则、status 子资源和打印列。
-3. [`api/v1alpha1/aijob_types.go`](../api/v1alpha1/aijob_types.go)：Controller 使用的 Go 类型，以及 Kubernetes runtime 所需的深拷贝实现。对照 CRD 阅读，可以区分服务端约束和进程内数据结构。
+2. [`api/v1alpha1/aijob_types.go`](../api/v1alpha1/aijob_types.go)：`AIJob` API 的 code-first 源头。Go 字段给 Controller 使用，kubebuilder marker 生成 API Server 的字段校验、默认值、不可变规则、status 子资源和打印列。
+3. [`deploy/crd.yaml`](../deploy/crd.yaml)：`make generate` 产出的 CRD，是 API Server 实际看到的 `AIJob` 契约。对照 Go 类型阅读，可以确认生成后的服务端 schema 是否符合预期。
 4. [`api/v1alpha1/groupversion_info.go`](../api/v1alpha1/groupversion_info.go)：把 `AIJob`、`AIJobList` 注册到 `infra.example.io/v1alpha1` Scheme。
 
 ### 2. 看 Controller 如何启动
@@ -81,7 +81,7 @@ AIJob YAML
 
 | 想确认的问题 | 首先查看 |
 | --- | --- |
-| AIJob 接受哪些字段，哪些值会被拒绝 | `deploy/crd.yaml` |
+| AIJob 接受哪些字段，哪些值会被拒绝 | `api/v1alpha1/aijob_types.go` 的字段与 kubebuilder marker，必要时对照生成后的 `deploy/crd.yaml` |
 | 一个字段如何进入 JobSet 或 Pod | `internal/controller/aijob_controller.go` |
 | Controller 会覆盖哪些字段 | `reconcileOwnedFields` 及其测试 |
 | `nvlink`、`pcie`、`same-rack` 分别由谁处理 | `schedulingAnnotations`、`internal/topology/constants.go` |

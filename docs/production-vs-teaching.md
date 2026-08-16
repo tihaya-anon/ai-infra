@@ -57,7 +57,7 @@ Scheduler plugin 的入口应继续对齐 Scheduler Framework：`PreScore` / `Sc
 | 领域 | 教学版 | 生产版要求 |
 | --- | --- | --- |
 | API 版本 | 单个 `v1alpha1`，字段少 | 多版本兼容、conversion、defaulting、validation webhook、废弃策略 |
-| CRD 生成 | 手写 CRD YAML 为主 | `controller-gen` 生成 CRD/RBAC/webhook，review 生成 diff |
+| CRD 生成 | Go 类型和 kubebuilder marker 生成 CRD；RBAC 和部署清单仍是静态 YAML | `controller-gen` 生成 CRD/RBAC/webhook，review 生成 diff |
 | Controller | 单一 happy path，少量 status | 幂等、冲突重试、server-side apply、finalizer、事件、条件语义稳定 |
 | Scheduler | 一个 `ScorePlugin` 演示节点偏好 | `PreFilter`/`Filter`/`PreScore`/`Score` 组合，缓存、性能预算、可解释打分 |
 | 资源发现 | kind label 和模拟扩展资源 | DRA、device plugin、NodeResourceTopology、厂商 API 或 inventory adapter |
@@ -211,8 +211,8 @@ Scheduler 测试重点：
 
 建议按这个顺序推进：
 
-1. 用 `controller-gen` 统一生成 CRD、RBAC 和 deepcopy。
-2. 把手写 deploy YAML 迁到 `config/`，用 Kustomize 或 Helm 组织环境差异。
+1. 继续扩大 `controller-gen` 覆盖范围，统一生成 RBAC 和 webhook 清单。
+2. 把静态 deploy YAML 迁到 `config/`，用 Kustomize 或 Helm 组织环境差异。
 3. 固化 `AIJob` API 语义，补 defaulting/validation webhook。
 4. 从 scheduler plugin 中抽出 `topology`、`resources`、`scoring` 三个深模块。
 5. 把 Kueue、JobSet、DRA/设备信息接入做成 adapter。

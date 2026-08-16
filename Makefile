@@ -22,6 +22,10 @@ tools:
 
 generate: tools
 	$(CONTROLLER_GEN) object paths=./api/...
+	@tmp_dir="$$(mktemp -d)"; \
+	trap 'rm -rf "$$tmp_dir"' EXIT; \
+	$(CONTROLLER_GEN) crd:maxDescLen=0 paths=./api/... output:crd:dir="$$tmp_dir"; \
+	cp "$$tmp_dir/infra.example.io_aijobs.yaml" deploy/crd.yaml
 	$(GOIMPORTS) -w ./api
 
 fmt:
