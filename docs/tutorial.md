@@ -829,8 +829,56 @@ metadata:
 
 ## 七、AIJob Controller 的目标形态
 
-Controller-runtime 需要先知道“Go 里的 struct”和“Kubernetes API 里的资源身份”如何对应。这个对应关系由
-`runtime.Scheme` 保存：
+### 先分清 GVK、GVR 和 Go 类型
+
+Kubernetes 用 `apiVersion` 和 `kind` 表示对象类型。Go 代码里通常把它拆成 **GVK**：
+
+```text
+GVK = Group + Version + Kind
+```
+
+`apiVersion` 由 `Group/Version` 组成；core group 没有显式 group，所以 Pod 的 `apiVersion`
+只是 `v1`。
+
+| YAML 里的身份 | GVK |
+| --- | --- |
+| `apiVersion: infra.example.io/v1alpha1`<br/>`kind: AIJob` | `Group=infra.example.io`<br/>`Version=v1alpha1`<br/>`Kind=AIJob` |
+| `apiVersion: jobset.x-k8s.io/v1alpha2`<br/>`kind: JobSet` | `Group=jobset.x-k8s.io`<br/>`Version=v1alpha2`<br/>`Kind=JobSet` |
+| `apiVersion: batch/v1`<br/>`kind: Job` | `Group=batch`<br/>`Version=v1`<br/>`Kind=Job` |
+| `apiVersion: v1`<br/>`kind: Pod` | `Group=`<br/>`Version=v1`<br/>`Kind=Pod` |
+
+还有一个相近概念是 **GVR**：
+
+```text
+GVR = Group + Version + Resource
+```
+
+`Kind` 是类型名，例如 `AIJob`；`Resource` 是 REST API 路径里的复数资源名，例如 `aijobs`。
+所以一次读取 AIJob 的请求大致落在这个路径上：
+
+```text
+/apis/infra.example.io/v1alpha1/namespaces/default/aijobs/demo-training
+```
+
+可以这样记：
+
+```mermaid
+flowchart LR
+    GVK[GVK<br/>对象类型身份<br/>AIJob] --> Scheme[runtime.Scheme<br/>映射到 Go struct]
+    GVR[GVR<br/>REST 资源路径<br/>aijobs] --> API[API Server<br/>路由到存储和 schema]
+```
+
+### CRD、Go 类型和 Scheme 的分工
+
+这三个东西经常一起出现，但服务对象不同：
+
+| 机制 | 服务谁 | 回答什么问题 |
+| --- | --- | --- |
+| CRD | API Server | 集群里是否存在 `AIJob` 这种资源；它的 schema、默认值、校验、status 子资源是什么 |
+| Go 类型 | Controller 代码 | `AIJob.spec.workers`、`AIJob.status.conditions` 在进程里用什么字段访问 |
+| Scheme | Controller-runtime | 某个 GVK 应该解码成哪个 Go struct；某个 Go struct 对应哪个 GVK |
+
+完整关系是：
 
 ```mermaid
 flowchart TD
@@ -843,19 +891,20 @@ flowchart TD
     Scheme --> Owner[OwnerReference<br/>apiVersion kind uid]
 ```
 
-`apiVersion` 和 `kind` 是对象在 Kubernetes API 中的身份；`runtime.Scheme` 则是 Controller
-进程内的类型字典。它回答的是：
+在本项目里，Scheme 里的关键对应关系是：
 
-| Kubernetes API 身份 | Go 类型 |
+| GVK | Go 类型 |
 | --- | --- |
 | `infra.example.io/v1alpha1` + `AIJob` | `aiv1alpha1.AIJob` |
 | `jobset.x-k8s.io/v1alpha2` + `JobSet` | `jobsetv1alpha2.JobSet` |
 | `batch/v1` + `Job` | `batchv1.Job` |
 | `v1` + `Pod` | `corev1.Pod` |
 
-因此 `cmd/controller/main.go` 启动时会把内置类型、AIJob 和 JobSet 加进同一个 Scheme。之后
-Controller-runtime 才能把 API Server 里的对象解码成正确的 Go struct，也能在需要写
+因此 [cmd/controller/main.go](../cmd/controller/main.go) 启动时会把内置类型、AIJob 和 JobSet 加进同一个 Scheme。
+之后 Controller-runtime 才能把 API Server 里的对象解码成正确的 Go struct，也能在需要写
 `OwnerReference` 时知道某个 Go 对象对应的 `apiVersion` 和 `kind`。
+
+### AIJob API 采用 code-first
 
 本项目采用 code-first 维护 `AIJob` API：Go 类型和 kubebuilder marker 是源头，
 `deploy/crd.yaml` 是生成物。这样读源码时先看 `api/v1alpha1/aijob_types.go`，就能同时看到
@@ -881,6 +930,8 @@ flowchart TD
 
 修改 `AIJob.spec` 时，不应手改生成后的 CRD 再反推 Go 代码；应先改 Go 类型和 marker，然后运行
 `make generate`。部署时 API Server 仍然只接收生成后的 CRD YAML，只是这个 YAML 现在由代码稳定生成。
+
+### Controller 入口保持窄
 
 入口声明它管理 AIJob，并监听自己创建的 JobSet：
 
