@@ -10,6 +10,7 @@
 - [教程](docs/tutorial.md)：理解架构、组件边界、GPU 拓扑背景和实验操作；
 - [源码阅读指南](docs/code-reading-guide.md)：按数据流跟读文件、关键函数和测试；
 - [调度实验指南](docs/scheduling-experiment.md)：运行 baseline/optimized 对照并解释原始结果；
+- [生产化差异说明](docs/production-vs-teaching.md)：说明教学实验走向生产控制面的保留点、重做点和模块结构；
 - [实验报告模板](docs/experiment-report-template.md)：记录环境、证据、实测结果和限制。
 
 运行实验：
