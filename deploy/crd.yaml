@@ -42,16 +42,28 @@ spec:
                 items:
                   type: string
                 type: array
+                x-kubernetes-validations:
+                - message: args is immutable
+                  rule: self == oldSelf
               gpuPerWorker:
                 format: int64
                 minimum: 1
                 type: integer
+                x-kubernetes-validations:
+                - message: gpuPerWorker is immutable
+                  rule: self == oldSelf
               gpuResource:
                 default: example.com/gpu
                 type: string
+                x-kubernetes-validations:
+                - message: gpuResource is immutable
+                  rule: self == oldSelf
               image:
                 default: ai-infra-lab:dev
                 type: string
+                x-kubernetes-validations:
+                - message: image is immutable
+                  rule: self == oldSelf
               jobSetOverrides:
                 properties:
                   failurePolicy:
@@ -95,6 +107,9 @@ spec:
                           type: object
                         type: array
                     type: object
+                    x-kubernetes-validations:
+                    - message: failurePolicy is immutable
+                      rule: self == oldSelf
                   successPolicy:
                     properties:
                       operator:
@@ -110,6 +125,11 @@ spec:
                     required:
                     - operator
                     type: object
+                    x-kubernetes-validations:
+                    - message: successPolicy is immutable
+                      rule: self == oldSelf
+                  suspend:
+                    type: boolean
                 type: object
               topology:
                 default: any
@@ -119,17 +139,20 @@ spec:
                 - pcie
                 - same-rack
                 type: string
+                x-kubernetes-validations:
+                - message: topology is immutable
+                  rule: self == oldSelf
               workers:
                 format: int32
                 minimum: 1
                 type: integer
+                x-kubernetes-validations:
+                - message: workers is immutable
+                  rule: self == oldSelf
             required:
             - gpuPerWorker
             - workers
             type: object
-            x-kubernetes-validations:
-            - message: AIJob spec is immutable; recreate the AIJob to change the workload
-              rule: self == oldSelf
           status:
             properties:
               conditions:
