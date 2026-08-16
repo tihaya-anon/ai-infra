@@ -111,6 +111,7 @@ func TestGivenJobSetOverridesWhenBuildingDesiredJobSetThenPoliciesAreCopied(t *t
 		SuccessPolicy: &jobsetv1alpha2.SuccessPolicy{
 			Operator: jobsetv1alpha2.OperatorAll,
 		},
+		Suspend: true,
 	}
 
 	// when
@@ -119,6 +120,8 @@ func TestGivenJobSetOverridesWhenBuildingDesiredJobSetThenPoliciesAreCopied(t *t
 	// then
 	assert.Expect(jobSet.Spec.FailurePolicy).To(gomega.Equal(job.Spec.JobSetOverrides.FailurePolicy))
 	assert.Expect(jobSet.Spec.SuccessPolicy).To(gomega.Equal(job.Spec.JobSetOverrides.SuccessPolicy))
+	assert.Expect(jobSet.Spec.Suspend).NotTo(gomega.BeNil())
+	assert.Expect(*jobSet.Spec.Suspend).To(gomega.BeTrue())
 }
 
 func TestGivenNoJobSetOverridesWhenBuildingDesiredJobSetThenPoliciesRemainUnset(t *testing.T) {
@@ -133,15 +136,17 @@ func TestGivenNoJobSetOverridesWhenBuildingDesiredJobSetThenPoliciesRemainUnset(
 	// then
 	assert.Expect(jobSet.Spec.FailurePolicy).To(gomega.BeNil())
 	assert.Expect(jobSet.Spec.SuccessPolicy).To(gomega.BeNil())
+	assert.Expect(jobSet.Spec.Suspend).To(gomega.BeNil())
 }
 
-func TestGivenDesiredPoliciesWhenCreatingOwnedJobSetThenImmutablePoliciesAreInitialized(t *testing.T) {
+func TestGivenDesiredOverridesWhenCreatingOwnedJobSetThenSpecFieldsAreInitialized(t *testing.T) {
 	assert := gomega.NewWithT(t)
 
 	// given
 	desired := desiredJobSet(testAIJob("any"))
 	desired.Spec.FailurePolicy = &jobsetv1alpha2.FailurePolicy{MaxRestarts: 1}
 	desired.Spec.SuccessPolicy = &jobsetv1alpha2.SuccessPolicy{Operator: jobsetv1alpha2.OperatorAll}
+	desired.Spec.Suspend = boolPtr(true)
 	actual := &jobsetv1alpha2.JobSet{}
 
 	// when
@@ -150,6 +155,28 @@ func TestGivenDesiredPoliciesWhenCreatingOwnedJobSetThenImmutablePoliciesAreInit
 	// then
 	assert.Expect(actual.Spec.FailurePolicy).To(gomega.Equal(desired.Spec.FailurePolicy))
 	assert.Expect(actual.Spec.SuccessPolicy).To(gomega.Equal(desired.Spec.SuccessPolicy))
+	assert.Expect(actual.Spec.Suspend).NotTo(gomega.BeNil())
+	assert.Expect(*actual.Spec.Suspend).To(gomega.BeTrue())
+}
+
+func TestGivenExistingJobSetWhenReconcilingSuspendThenSuspendIsUpdated(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
+	created := metav1.Now()
+	actual := &jobsetv1alpha2.JobSet{
+		ObjectMeta: metav1.ObjectMeta{CreationTimestamp: created},
+		Spec:       jobsetv1alpha2.JobSetSpec{Suspend: boolPtr(false)},
+	}
+	desired := desiredJobSet(testAIJob("any"))
+	desired.Spec.Suspend = boolPtr(true)
+
+	// when
+	reconcileOwnedFields(actual, desired)
+
+	// then
+	assert.Expect(actual.Spec.Suspend).NotTo(gomega.BeNil())
+	assert.Expect(*actual.Spec.Suspend).To(gomega.BeTrue())
 }
 
 func TestGivenExistingLabelsWhenReconcilingOwnedFieldsThenExternalLabelsArePreserved(t *testing.T) {
@@ -195,6 +222,7 @@ func TestGivenExistingJobSetWhenReconcilingOwnedFieldsThenDefaultedSpecIsPreserv
 	assert.Expect(actual.Spec.ReplicatedJobs).To(gomega.BeNil())
 	assert.Expect(actual.Spec.FailurePolicy).To(gomega.BeNil())
 	assert.Expect(actual.Spec.SuccessPolicy).To(gomega.BeNil())
+	assert.Expect(actual.Spec.Suspend).To(gomega.BeNil())
 }
 
 func TestGivenJobSetConditionsWhenProjectingStatusThenConditionsUseAIJobGeneration(t *testing.T) {

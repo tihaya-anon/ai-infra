@@ -84,7 +84,6 @@ func (r *AIJobReconciler) reconcileJobSet(
 			return err
 		}
 		reconcileOwnedFields(jobSet, desired)
-		// Kueue owns spec.suspend after admission; do not overwrite it here.
 		return nil
 	})
 	return jobSet, operationLabel(operation), err
@@ -146,6 +145,7 @@ func desiredJobSet(job *aiv1alpha1.AIJob) *jobsetv1alpha2.JobSet {
 	if job.Spec.JobSetOverrides != nil {
 		jobSet.Spec.FailurePolicy = job.Spec.JobSetOverrides.FailurePolicy
 		jobSet.Spec.SuccessPolicy = job.Spec.JobSetOverrides.SuccessPolicy
+		jobSet.Spec.Suspend = &job.Spec.JobSetOverrides.Suspend
 	}
 	return jobSet
 }
@@ -165,6 +165,7 @@ func reconcileOwnedFields(actual, desired *jobsetv1alpha2.JobSet) {
 		}
 	}
 
+	actual.Spec.Suspend = desired.Spec.Suspend
 	if actual.CreationTimestamp.IsZero() {
 		actual.Spec.ReplicatedJobs = desired.Spec.ReplicatedJobs
 		actual.Spec.Network = desired.Spec.Network
