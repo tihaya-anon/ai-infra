@@ -43,6 +43,8 @@ JobSet/Kueue 控制器镜像默认通过 DaoCloud 代理获取，Go 模块默认
 `EXTERNAL_IMAGE_MIRROR=`。完整的环境要求、组件职责和排错方式见教程。
 
 开发时运行 `make fmt` 格式化并整理 Go import，运行 `make verify` 检查格式、100 字符行宽、`go vet` 和测试。首次克隆后运行 `make hooks` 安装相同的 pre-commit 流程；提交涉及 Go 源码或模块文件时会自动执行。
+`make image` 使用 Docker BuildKit 的 module/build cache 构建 distroless nonroot 镜像，因此本地
+Docker Engine 需要支持 BuildKit。
 
 清理实验集群：
 

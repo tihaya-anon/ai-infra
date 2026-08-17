@@ -1,6 +1,9 @@
 .git
 .codex
 .agents
+.tools
+out
+openspec
 reference
 docs
 deploy

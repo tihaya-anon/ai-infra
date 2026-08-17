@@ -1110,10 +1110,17 @@ flowchart TD
 
 `Dockerfile` 不会向 Kubernetes 注册任何对象。它只做镜像构建：
 
-1. 在 Go builder 镜像中下载依赖；
-2. 编译四个 Linux 静态二进制：`controller`、`scheduler`、`worker`、`simulated-device-plugin`；
-3. 把这四个二进制复制进 distroless 运行时镜像；
-4. 得到同一个业务镜像 `ai-infra-lab:dev`。
+1. 先复制 `go.mod`、`go.sum`，通过 BuildKit cache mount 下载并复用 Go module；
+2. 再复制源码，通过独立的 Go build cache 一次编译四个 Linux 静态二进制：`controller`、
+   `scheduler`、`worker`、`simulated-device-plugin`；
+3. 使用 `-trimpath` 去除构建机路径，使用 `-s -w` 去除运行时不需要的符号和 DWARF 信息；
+4. 把 `/out/` 中的四个二进制一次复制进 distroless nonroot 运行时镜像，并显式使用 UID/GID 65532；
+5. 得到同一个业务镜像 `ai-infra-lab:dev`。
+
+`.dockerignore` 排除本地工具缓存、实验输出和文档等运行镜像不需要的目录，减少 build context。
+module cache 与 build cache 使用 BuildKit cache mount，不进入最终镜像层；源码变化时，未变化的 Go
+package 仍可复用编译缓存。修改 `go.mod` 或 `go.sum` 才会使依赖下载步骤失效。`make image` 显式设置
+`DOCKER_BUILDKIT=1`，因此需要支持 BuildKit 的 Docker Engine。
 
 这个镜像里同时有四个入口程序，但镜像本身只是一个文件系统和启动命令集合。它不会创建
 CRD，不会启动 Controller，也不会把 Scheduler 插件注册到集群。`make deploy` 里的
@@ -1140,7 +1147,7 @@ document，本项目用 `---` 把多个对象放在同一个文件里。
 
 ```text
 Dockerfile
-  -> 构建包含 /controller /scheduler /worker 的镜像
+  -> 构建包含 /controller /scheduler /worker /simulated-device-plugin 的镜像
 
 deploy/*.yaml
   -> 创建 Kubernetes 对象

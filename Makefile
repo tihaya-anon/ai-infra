@@ -83,10 +83,14 @@ hooks: tools
 	pre-commit install
 
 build:
-	go build ./cmd/controller ./cmd/scheduler ./cmd/worker ./cmd/labctl
+	go build ./cmd/controller ./cmd/scheduler ./cmd/worker ./cmd/deviceplugin ./cmd/labctl
 
 image:
-	docker build --build-arg GO_BUILDER_IMAGE=$(GO_BUILDER_IMAGE) --build-arg GOPROXY=$(GOPROXY) --build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) -t $(IMAGE) .
+	DOCKER_BUILDKIT=1 docker build \
+		--build-arg GO_BUILDER_IMAGE=$(GO_BUILDER_IMAGE) \
+		--build-arg GOPROXY=$(GOPROXY) \
+		--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) \
+		-t $(IMAGE) .
 
 cluster:
 	kind create cluster --name $(CLUSTER) --image $(KIND_NODE_IMAGE) --config kind.yaml

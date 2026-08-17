@@ -62,7 +62,8 @@ Scheduler plugin 的入口应继续对齐 Scheduler Framework：`PreScore` / `Sc
 | Scheduler | 一个 `ScorePlugin` 演示节点偏好 | `PreFilter`/`Filter`/`PreScore`/`Score` 组合，缓存、性能预算、可解释打分 |
 | 资源发现 | kind label 和模拟 Device Plugin | DRA、device plugin、NodeResourceTopology、厂商 API 或 inventory adapter |
 | Kueue | 两个业务队列、一个实验队列和简单 cohort | 多租户隔离、动态配额、准入策略、拓扑策略升级 |
-| 部署 | 静态 YAML | Helm/Kustomize、镜像签名、RBAC 收敛、Pod 安全、HA、rollout/rollback |
+| 镜像构建 | BuildKit 缓存、去符号静态二进制、distroless nonroot | 多架构、SBOM、provenance、签名、漏洞扫描、按 digest 发布 |
+| 部署 | 静态 YAML | Helm/Kustomize、RBAC 收敛、Pod 安全、HA、rollout/rollback |
 | 观测 | 基础 metrics 和实验证据 | SLO、告警、审计日志、trace、debug endpoint、调度决策解释 |
 | 测试 | 单元、envtest、kind e2e | 升级测试、兼容测试、性能测试、故障注入、真实 GPU staging |
 | 实验工具 | `internal/lab` 与 benchmark | 与生产控制面隔离，作为验证工具或独立包发布 |

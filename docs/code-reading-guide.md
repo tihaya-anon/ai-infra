@@ -60,7 +60,9 @@ AIJob YAML
 2. [`internal/deviceplugin/plugin.go`](../internal/deviceplugin/plugin.go) 与
    [`cmd/deviceplugin/main.go`](../cmd/deviceplugin/main.go)：实现并启动仅供 kind 实验使用的模拟 GPU
    Device Plugin。
-3. [`Dockerfile`](../Dockerfile)：把 Controller、Scheduler、Worker 和模拟 Device Plugin 构建为四个二进制，并放入同一个运行时镜像。
+3. [`Dockerfile`](../Dockerfile) 与 [`.dockerignore`](../.dockerignore)：先固定 module 下载层，再用
+   BuildKit module/build cache 一次编译四个去路径、去调试符号的静态二进制，最后复制到显式
+   nonroot 的 distroless 运行时；构建上下文排除本地工具缓存和实验输出。
 4. [`deploy/controller.yaml`](../deploy/controller.yaml)、[`deploy/rbac.yaml`](../deploy/rbac.yaml) 与
    [`deploy/access.yaml`](../deploy/access.yaml)：前者启动 Controller；生成的 RBAC 来自 Reconciler
    marker；静态 access 清单创建运行身份并完成 Controller/Scheduler 权限绑定。
@@ -70,7 +72,9 @@ AIJob YAML
 6. [`kind.yaml`](../kind.yaml)、[`deploy/device-plugin.yaml`](../deploy/device-plugin.yaml) 与
    [`scripts/label-nodes.sh`](../scripts/label-nodes.sh)：创建实验节点，用 Label 模拟 rack/GPU fabric，
    并由 Device Plugin 注册 GPU 容量。
-7. [`Makefile`](../Makefile)：把构建、建集群、部署依赖、提交样例和清理串成完整实验流程。最后读它，可以将前面的源码和清单映射到实际执行顺序。
+7. [`Makefile`](../Makefile)：`build` 覆盖五个本地命令入口，`image` 传入 builder、module proxy 和
+   runtime 镜像参数；其余 target 把建集群、部署依赖、提交样例和清理串成完整实验流程。
+   最后读它，可以将前面的源码和清单映射到实际执行顺序。
 
 ### 6. 沿实验结果反向阅读
 
