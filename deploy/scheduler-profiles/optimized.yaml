@@ -19,7 +19,11 @@ data:
             enabled:
               - name: GPUTopology
           score:
+            disabled:
+              - name: "*"
             enabled:
+              - name: NodeResourcesFit
+                weight: 10
               - name: GPUTopology
                 weight: 5
         pluginConfig:

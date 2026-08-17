@@ -57,13 +57,20 @@ AIJob YAML
 1. [`cmd/worker/main.go`](../cmd/worker/main.go) 与
    [`internal/worker/worker.go`](../internal/worker/worker.go)：从信号入口读到参数校验、complete/wait
    状态机、indexed identity 和 NDJSON lifecycle 记录。
-2. [`Dockerfile`](../Dockerfile)：把 Controller、Scheduler 和 Worker 构建为三个二进制，并放入同一个运行时镜像。
-3. [`deploy/controller.yaml`](../deploy/controller.yaml) 与 [`deploy/rbac.yaml`](../deploy/rbac.yaml)：Controller 的启动命令、ServiceAccount，以及读写 AIJob/JobSet 所需的最小权限；RBAC 也包含自定义 Scheduler 的权限绑定。
-4. [`internal/manifests/kueue.go`](../internal/manifests/kueue.go) 与
+2. [`internal/deviceplugin/plugin.go`](../internal/deviceplugin/plugin.go) 与
+   [`cmd/deviceplugin/main.go`](../cmd/deviceplugin/main.go)：实现并启动仅供 kind 实验使用的模拟 GPU
+   Device Plugin。
+3. [`Dockerfile`](../Dockerfile)：把 Controller、Scheduler、Worker 和模拟 Device Plugin 构建为四个二进制，并放入同一个运行时镜像。
+4. [`deploy/controller.yaml`](../deploy/controller.yaml)、[`deploy/rbac.yaml`](../deploy/rbac.yaml) 与
+   [`deploy/access.yaml`](../deploy/access.yaml)：前者启动 Controller；生成的 RBAC 来自 Reconciler
+   marker；静态 access 清单创建运行身份并完成 Controller/Scheduler 权限绑定。
+5. [`internal/manifests/kueue.go`](../internal/manifests/kueue.go) 与
    [`deploy/kueue-resources.yaml`](../deploy/kueue-resources.yaml)：前者定义可选队列、配额和
    cohort，后者是生成的部署清单；它们承接 Controller 传下来的队列与跨节点拓扑意图。
-5. [`kind.yaml`](../kind.yaml) 与 [`scripts/label-nodes.sh`](../scripts/label-nodes.sh)：创建实验节点，并用 Label 和扩展资源模拟 rack、GPU fabric 与 GPU 容量。
-6. [`Makefile`](../Makefile)：把构建、建集群、部署依赖、提交样例和清理串成完整实验流程。最后读它，可以将前面的源码和清单映射到实际执行顺序。
+6. [`kind.yaml`](../kind.yaml)、[`deploy/device-plugin.yaml`](../deploy/device-plugin.yaml) 与
+   [`scripts/label-nodes.sh`](../scripts/label-nodes.sh)：创建实验节点，用 Label 模拟 rack/GPU fabric，
+   并由 Device Plugin 注册 GPU 容量。
+7. [`Makefile`](../Makefile)：把构建、建集群、部署依赖、提交样例和清理串成完整实验流程。最后读它，可以将前面的源码和清单映射到实际执行顺序。
 
 ### 6. 沿实验结果反向阅读
 
@@ -74,7 +81,7 @@ AIJob YAML
 3. [`internal/lab/cluster.go`](../internal/lab/cluster.go)：查看 AIJob、JobSet、Kueue Workload、
    Job、Pod、Node、Deployment、Event、log 与 metrics 如何被 typed client 发现和等待。
 4. [`internal/lab/benchmark.go`](../internal/lab/benchmark.go)：沿“切 profile -> 三个 holder -> capacity
-   snapshot -> probe -> partial result -> cleanup/restore”阅读主实验。
+   snapshot -> probe -> baseline 释放恢复 -> evidence -> cleanup/restore”阅读主实验。
 5. [`internal/lab/evidence.go`](../internal/lab/evidence.go) 与
    [`internal/lab/exercise.go`](../internal/lab/exercise.go)：理解失败时为何先收证据、后清理。
 6. [`cmd/labctl/main.go`](../cmd/labctl/main.go)：最后看 CLI 如何对所有会修改集群的命令应用
@@ -90,6 +97,6 @@ AIJob YAML
 | `nvlink`、`pcie`、`same-rack` 分别由谁处理 | `schedulingAnnotations`、`internal/topology/constants.go` |
 | 自定义调度器怎样找到并启用插件 | `cmd/scheduler/main.go`、`deploy/scheduler-config.yaml` |
 | 队列、配额和 rack 拓扑在哪里配置 | `internal/manifests/kueue.go` |
-| 本地实验如何模拟 GPU 节点 | `kind.yaml`、`scripts/label-nodes.sh` |
+| 本地实验如何模拟 GPU 节点 | `internal/deviceplugin/`、`deploy/device-plugin.yaml`、`scripts/label-nodes.sh` |
 | 为什么 baseline 和 optimized 可比较 | `deploy/scheduler-profiles/`、`benchmark_test.go` |
 | 失败后证据写到哪里、是否完整 | `evidence.go`、bundle 的 `manifest.json` |

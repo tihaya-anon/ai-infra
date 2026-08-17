@@ -3,7 +3,7 @@ package lab
 
 import "time"
 
-const ResultSchemaVersion = "v1"
+const ResultSchemaVersion = "v2"
 
 // BenchmarkResult is one profile and repetition observation document.
 type BenchmarkResult struct {
@@ -18,6 +18,7 @@ type BenchmarkResult struct {
 	Workloads     []WorkloadDefinition `json:"workloads"`
 	Lifecycle     []Lifecycle          `json:"lifecycle"`
 	Placements    []PodPlacement       `json:"placements"`
+	Workers       []WorkerRuntime      `json:"workers"`
 	Outcomes      map[string]string    `json:"outcomes"`
 	Measurements  Measurements         `json:"measurements"`
 	Evidence      []string             `json:"evidence,omitempty"`
@@ -67,11 +68,44 @@ type PodPlacement struct {
 	Phase           string `json:"phase"`
 }
 
+// WorkerRuntime summarizes one worker process from its Pod state and NDJSON records.
+type WorkerRuntime struct {
+	Pod             string           `json:"pod"`
+	Workload        string           `json:"workload"`
+	CompletionIndex string           `json:"completionIndex,omitempty"`
+	StartedAt       *time.Time       `json:"startedAt,omitempty"`
+	FinishedAt      *time.Time       `json:"finishedAt,omitempty"`
+	ExitReason      string           `json:"exitReason,omitempty"`
+	ExitCode        *int             `json:"exitCode,omitempty"`
+	Parameters      WorkerParameters `json:"parameters"`
+}
+
+// WorkerParameters is the normalized argument summary emitted by the worker.
+type WorkerParameters struct {
+	Mode         string `json:"mode,omitempty"`
+	Duration     string `json:"duration,omitempty"`
+	StartupDelay string `json:"startupDelay,omitempty"`
+	FailIndexes  []int  `json:"failIndexes,omitempty"`
+}
+
 // Measurements contains the aggregate quantities compared across profiles.
 type Measurements struct {
 	MakespanSeconds    *float64      `json:"makespanSeconds,omitempty"`
 	UnschedulableCount int           `json:"unschedulableCount"`
 	Fragmentation      Fragmentation `json:"fragmentation"`
+	Recovery           Recovery      `json:"recovery"`
+}
+
+// Recovery measures whether releasing one holder unblocked the fragmented probe.
+type Recovery struct {
+	Attempted              bool       `json:"attempted"`
+	InitiallyUnschedulable bool       `json:"initiallyUnschedulable"`
+	ReleasedWorkload       string     `json:"releasedWorkload,omitempty"`
+	UnschedulableAt        *time.Time `json:"unschedulableAt,omitempty"`
+	ReleasedAt             *time.Time `json:"releasedAt,omitempty"`
+	RecoveredAt            *time.Time `json:"recoveredAt,omitempty"`
+	LatencySeconds         *float64   `json:"latencySeconds,omitempty"`
+	Recovered              bool       `json:"recovered"`
 }
 
 // Fragmentation is target-relative simulated-GPU capacity evidence.

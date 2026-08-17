@@ -36,6 +36,24 @@ func TestGivenSchedulerProfilesWhenNormalizingStrategyThenOnlyScoringStrategyDif
 	assert.Expect(baselineType).To(gomega.Equal("LeastAllocated"))
 	assert.Expect(optimizedType).To(gomega.Equal("MostAllocated"))
 	assert.Expect(baseline).To(gomega.Equal(optimized))
+	assertControlledScorePlugins(t, baseline)
+}
+
+func assertControlledScorePlugins(t *testing.T, profile map[string]any) {
+	t.Helper()
+	assert := gomega.NewWithT(t)
+	data := profile["data"].(map[string]any)
+	config := map[string]any{}
+	assert.Expect(yaml.Unmarshal([]byte(data["config.yaml"].(string)), &config)).To(gomega.Succeed())
+	profiles := config["profiles"].([]any)
+	plugins := profiles[0].(map[string]any)["plugins"].(map[string]any)
+	score := plugins["score"].(map[string]any)
+
+	assert.Expect(score["disabled"]).To(gomega.Equal([]any{map[string]any{"name": "*"}}))
+	assert.Expect(score["enabled"]).To(gomega.Equal([]any{
+		map[string]any{"name": "NodeResourcesFit", "weight": float64(10)},
+		map[string]any{"name": "GPUTopology", "weight": float64(5)},
+	}))
 }
 
 func TestGivenResourcesFromMultipleRunsWhenCleaningUpThenOnlySelectedRunIsRemoved(t *testing.T) {
@@ -170,6 +188,26 @@ func TestGivenExerciseKindsWhenGeneratingWorkloadNamesThenJobSetPodNamesFitLimit
 			replicatedJobName := name + "-workers-0"
 
 			// then
+			assert.Expect(len(replicatedJobName)).To(gomega.BeNumerically("<=", 50))
+		})
+	}
+}
+
+func TestGivenE2EScenariosWhenGeneratingWorkloadNamesThenJobSetPodNamesFitLimits(t *testing.T) {
+	tests := []struct {
+		scenario       string
+		workloadPrefix string
+	}{
+		{scenario: "success", workloadPrefix: "success-"},
+		{scenario: "selected-worker-failure", workloadPrefix: "failure-"},
+		{scenario: "controller-restart-cleanup", workloadPrefix: "restart-"},
+	}
+	for _, test := range tests {
+		t.Run(test.scenario, func(t *testing.T) {
+			assert := gomega.NewWithT(t)
+			runID := newRunID(e2eRunPrefix(test.scenario))
+			replicatedJobName := test.workloadPrefix + runID + "-workers-0"
+
 			assert.Expect(len(replicatedJobName)).To(gomega.BeNumerically("<=", 50))
 		})
 	}

@@ -42,6 +42,10 @@ func TestGivenSelectedFailureIndexWhenRunningThenWorkerFailsWithCompletionIndex(
 	assertOutcomes(t, records, "started", "failed")
 	assert.Expect(records[1].CompletionIndex).NotTo(gomega.BeNil())
 	assert.Expect(*records[1].CompletionIndex).To(gomega.Equal(3))
+	assert.Expect(records[1].ExitReason).To(gomega.Equal("failed"))
+	assert.Expect(records[1].ExitCode).NotTo(gomega.BeNil())
+	assert.Expect(*records[1].ExitCode).To(gomega.Equal(ExitFailure))
+	assert.Expect(records[1].Parameters.FailIndexes).To(gomega.Equal([]int{1, 3}))
 }
 
 func TestGivenCancelledContextWhenRunningWaitModeThenWorkerTerminates(t *testing.T) {
@@ -57,6 +61,7 @@ func TestGivenCancelledContextWhenRunningWaitModeThenWorkerTerminates(t *testing
 	// then
 	assert.Expect(code).To(gomega.Equal(ExitTermination))
 	assertOutcomes(t, records, "started", "terminated")
+	assert.Expect(records[1].ExitReason).To(gomega.Equal("terminated"))
 }
 
 func TestGivenStartupDelayWhenRunningThenWorkerWaitsBeforeCompleting(t *testing.T) {
@@ -108,6 +113,7 @@ func TestGivenSuccessfulRunWhenWritingOutputThenRecordsAreNewlineDelimitedJSON(t
 	assert.Expect(code).To(gomega.Equal(ExitSuccess))
 	assert.Expect(stdout.String()).To(gomega.HaveSuffix("\n"))
 	assert.Expect(lines).To(gomega.HaveLen(2))
+	assert.Expect(stdout.String()).To(gomega.ContainSubstring(`"parameters"`))
 	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
 		assert.Expect(json.Valid([]byte(line))).To(gomega.BeTrue(), "invalid JSON line %q", line)
 	}

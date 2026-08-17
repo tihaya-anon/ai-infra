@@ -21,7 +21,7 @@ func TestGivenBenchmarkResultsWhenValidatingThenContractViolationsAreReported(t 
 
 	// when
 	validError := ValidateResult(valid)
-	valid.SchemaVersion = "v2"
+	valid.SchemaVersion = "v999"
 	valid.Missing = nil
 	invalidError := ValidateResult(valid)
 
@@ -31,4 +31,21 @@ func TestGivenBenchmarkResultsWhenValidatingThenContractViolationsAreReported(t 
 		gomega.ContainSubstring("schemaVersion"),
 		gomega.ContainSubstring("missing observations"),
 	)))
+}
+
+func TestGivenCompleteBaselineWithoutRecoveryWhenValidatingThenRecoveryIsRequired(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
+	result := BenchmarkResult{
+		SchemaVersion: ResultSchemaVersion, RunID: "run", Timestamp: time.Now(),
+		Profile: "baseline", Complete: true,
+		Cluster: ClusterCapacity{EligibleNodes: 3, GPUPerNode: 4, TotalGPUs: 12},
+	}
+
+	// when
+	err := ValidateResult(result)
+
+	// then
+	assert.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("release recovery")))
 }

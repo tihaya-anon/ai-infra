@@ -12,9 +12,11 @@ COPY api ./api
 COPY internal ./internal
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/controller ./cmd/controller && \
     CGO_ENABLED=0 GOOS=linux go build -o /out/scheduler ./cmd/scheduler && \
-    CGO_ENABLED=0 GOOS=linux go build -o /out/worker ./cmd/worker
+    CGO_ENABLED=0 GOOS=linux go build -o /out/worker ./cmd/worker && \
+    CGO_ENABLED=0 GOOS=linux go build -o /out/simulated-device-plugin ./cmd/deviceplugin
 
 FROM ${RUNTIME_IMAGE}
 COPY --from=builder /out/controller /controller
 COPY --from=builder /out/scheduler /scheduler
 COPY --from=builder /out/worker /worker
+COPY --from=builder /out/simulated-device-plugin /simulated-device-plugin

@@ -15,7 +15,7 @@ GOIMPORTS := ./scripts/goimports.sh
 CONTROLLER_GEN := ./scripts/controller-gen.sh
 ENVTEST_K8S_VERSION ?= 1.34.0
 
-.PHONY: tools generate fmt fmt-check line-length vet test test-api test-e2e verify hooks build image cluster preload-external-images deploy demo headlamp headlamp-token headlamp-port-forward headlamp-port-forward-stop benchmark benchmark-validate failure-capacity failure-worker failure-restart clean
+.PHONY: tools generate generated-check fmt fmt-check line-length vet test test-api test-e2e verify hooks build image cluster preload-external-images deploy demo headlamp headlamp-token headlamp-port-forward headlamp-port-forward-stop benchmark benchmark-validate failure-capacity failure-worker failure-restart clean
 
 tools:
 	$(GOIMPORTS) --install
@@ -26,10 +26,24 @@ generate: tools
 	@tmp_dir="$$(mktemp -d)"; \
 	trap 'rm -rf "$$tmp_dir"' EXIT; \
 	$(CONTROLLER_GEN) crd:maxDescLen=0 paths=./api/... output:crd:dir="$$tmp_dir"; \
-	cp "$$tmp_dir/infra.example.io_aijobs.yaml" deploy/crd.yaml
+	cp "$$tmp_dir/infra.example.io_aijobs.yaml" deploy/crd.yaml; \
+	$(CONTROLLER_GEN) rbac:roleName=aijob-controller paths=./internal/controller/... \
+		output:rbac:dir="$$tmp_dir"; \
+	cp "$$tmp_dir/role.yaml" deploy/rbac.yaml
 	go run ./scripts/sync-aijob-schema.go
 	go run ./cmd/manifestgen
 	$(GOIMPORTS) -w ./api
+
+generated-check: tools
+	@tmp_dir="$$(mktemp -d)"; \
+	trap 'rm -rf "$$tmp_dir"' EXIT; \
+	$(CONTROLLER_GEN) crd:maxDescLen=0 paths=./api/... output:crd:dir="$$tmp_dir"; \
+	cmp "$$tmp_dir/infra.example.io_aijobs.yaml" deploy/crd.yaml || \
+		{ echo "deploy/crd.yaml is stale; run 'make generate'"; exit 1; }; \
+	$(CONTROLLER_GEN) rbac:roleName=aijob-controller paths=./internal/controller/... \
+		output:rbac:dir="$$tmp_dir"; \
+	cmp "$$tmp_dir/role.yaml" deploy/rbac.yaml || \
+		{ echo "deploy/rbac.yaml is stale; run 'make generate'"; exit 1; }
 
 fmt:
 	$(GOIMPORTS) -w .
@@ -63,7 +77,7 @@ test-api:
 test-e2e:
 	go run ./cmd/labctl e2e --cluster $(CLUSTER)
 
-verify: fmt-check line-length vet test
+verify: generated-check fmt-check line-length vet test
 
 hooks: tools
 	pre-commit install
@@ -88,7 +102,9 @@ deploy: image preload-external-images
 	kubectl -n kueue-system rollout status deployment/kueue-controller-manager --timeout=180s
 	kubectl apply -f deploy/crd.yaml
 	kubectl apply -f deploy/rbac.yaml
-	kubectl apply -f deploy/kueue-resources.yaml
+	kubectl apply -f deploy/access.yaml
+	./scripts/kubectl-apply-retry.sh -f deploy/kueue-resources.yaml
+	kubectl apply -f deploy/device-plugin.yaml
 	kubectl apply -f deploy/controller.yaml
 	kubectl apply -f deploy/scheduler-config.yaml
 	kubectl -n ai-infra-system rollout status deployment/aijob-controller --timeout=120s

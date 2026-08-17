@@ -1,88 +1,41 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/yannh/kubernetes-json-schema/master/v1.34.1-standalone-strict/all.json
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: ai-infra-system
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: aijob-controller
-  namespace: ai-infra-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: aijob-controller
 rules:
-  - apiGroups: ["jobset.x-k8s.io"]
-    resources: ["jobsets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
-  - apiGroups: ["kueue.x-k8s.io"]
-    resources: ["localqueues"]
-    verbs: ["get"]
-  - apiGroups: ["infra.example.io"]
-    resources: ["aijobs"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["infra.example.io"]
-    resources: ["aijobs/status"]
-    verbs: ["get", "patch", "update"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: aijob-controller
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: aijob-controller
-subjects:
-  - kind: ServiceAccount
-    name: aijob-controller
-    namespace: ai-infra-system
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: ai-scheduler
-  namespace: ai-infra-system
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: ai-scheduler
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: system:kube-scheduler
-subjects:
-  - kind: ServiceAccount
-    name: ai-scheduler
-    namespace: ai-infra-system
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: ai-scheduler-volume
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: system:volume-scheduler
-subjects:
-  - kind: ServiceAccount
-    name: ai-scheduler
-    namespace: ai-infra-system
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: ai-scheduler-authentication-reader
-  namespace: kube-system
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: extension-apiserver-authentication-reader
-subjects:
-  - kind: ServiceAccount
-    name: ai-scheduler
-    namespace: ai-infra-system
+- apiGroups:
+  - infra.example.io
+  resources:
+  - aijobs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - infra.example.io
+  resources:
+  - aijobs/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - jobset.x-k8s.io
+  resources:
+  - jobsets
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kueue.x-k8s.io
+  resources:
+  - localqueues
+  verbs:
+  - get
+  - list
+  - watch

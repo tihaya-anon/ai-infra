@@ -13,6 +13,7 @@ import (
 	"time"
 
 	aiv1alpha1 "github.com/tihaya-anon/ai-infra-lab/api/v1alpha1"
+	"github.com/tihaya-anon/ai-infra-lab/internal/manifests"
 	"github.com/tihaya-anon/ai-infra-lab/internal/topology"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -37,6 +38,7 @@ type Profile struct {
 type BenchmarkOptions struct {
 	Namespace   string
 	OutputDir   string
+	EvidenceDir string
 	Timeout     time.Duration
 	Repetitions int
 	Profiles    []Profile
@@ -55,6 +57,9 @@ func NewBenchmarkRunner(cluster *Cluster, options BenchmarkOptions) (*BenchmarkR
 	}
 	if options.OutputDir == "" {
 		options.OutputDir = "out/benchmark"
+	}
+	if options.EvidenceDir == "" {
+		options.EvidenceDir = "out/evidence"
 	}
 	if options.Timeout <= 0 {
 		return nil, errors.New("benchmark timeout must be positive")
@@ -117,6 +122,11 @@ func (r *BenchmarkRunner) runOne(
 		}
 		if err := r.collectResult(cleanupCtx, &result); err != nil {
 			result.Missing = append(result.Missing, "final snapshot: "+err.Error())
+		}
+		root, err := r.collectEvidence(cleanupCtx, result)
+		result.Evidence = append(result.Evidence, root)
+		if err != nil {
+			result.Missing = append(result.Missing, "evidence: "+err.Error())
 		}
 		result.Complete = runErr == nil && len(result.Missing) == 0
 		if err := writeResult(r.options.OutputDir, profile.Name, repetition, result); err != nil {
@@ -182,17 +192,95 @@ func (r *BenchmarkRunner) runOne(
 		}
 		result.Outcomes[probe.Name] = "completed"
 	} else {
-		if _, err := r.cluster.WaitForPodUnschedulable(
+		unschedulable, err := r.cluster.WaitForPodUnschedulable(
 			ctx, r.options.Namespace, runID, probe.Name, r.options.Timeout,
-		); err != nil {
+		)
+		if err != nil {
 			runErr = err
 			return runErr
 		}
-		result.Outcomes[probe.Name] = "unschedulable"
+		result.Measurements.Recovery.Attempted = true
+		result.Measurements.Recovery.InitiallyUnschedulable = true
+		result.Measurements.Recovery.UnschedulableAt = podConditionTime(
+			unschedulable, corev1.PodScheduled, corev1.ConditionFalse,
+		)
+		holder := result.Workloads[0].Name
+		result.Measurements.Recovery.ReleasedWorkload = holder
+		releasedAt := time.Now().UTC()
+		if err := r.cluster.Client.Delete(ctx, &aiv1alpha1.AIJob{
+			ObjectMeta: metav1.ObjectMeta{Name: holder, Namespace: r.options.Namespace},
+		}); err != nil {
+			runErr = fmt.Errorf("release holder %s: %w", holder, err)
+			return runErr
+		}
+		result.Measurements.Recovery.ReleasedAt = &releasedAt
+		result.Outcomes[holder] = "released"
+		_, err = r.cluster.WaitForPodScheduled(
+			ctx, r.options.Namespace, runID, probe.Name, r.options.Timeout,
+		)
+		if err != nil {
+			runErr = err
+			return runErr
+		}
+		recoveredAt := time.Now().UTC()
+		result.Measurements.Recovery.RecoveredAt = &recoveredAt
+		latency := recoveredAt.Sub(releasedAt).Seconds()
+		result.Measurements.Recovery.LatencySeconds = &latency
+		if _, err := r.cluster.WaitForAIJobCondition(ctx, types.NamespacedName{
+			Namespace: r.options.Namespace, Name: probe.Name,
+		}, "Completed", r.options.Timeout); err != nil {
+			runErr = err
+			return runErr
+		}
+		result.Measurements.Recovery.Recovered = true
+		result.Outcomes[probe.Name] = "completed-after-release"
 	}
 	makespan := time.Since(start).Seconds()
 	result.Measurements.MakespanSeconds = &makespan
 	return nil
+}
+
+func podConditionTime(
+	pod *corev1.Pod,
+	conditionType corev1.PodConditionType,
+	status corev1.ConditionStatus,
+) *time.Time {
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == conditionType && condition.Status == status {
+			value := condition.LastTransitionTime.Time
+			return &value
+		}
+	}
+	return nil
+}
+
+func (r *BenchmarkRunner) collectEvidence(
+	ctx context.Context,
+	result BenchmarkResult,
+) (string, error) {
+	expected := []string{"probe completed"}
+	observed := make([]string, 0, 2)
+	if result.Profile == "baseline" {
+		expected = append(expected, "probe initially unschedulable")
+		if result.Measurements.Recovery.InitiallyUnschedulable {
+			observed = append(observed, "probe initially unschedulable")
+		}
+	}
+	for _, outcome := range result.Outcomes {
+		if outcome == "completed" || outcome == "completed-after-release" {
+			observed = append(observed, "probe completed")
+			break
+		}
+	}
+	collector, err := NewEvidenceCollector(r.cluster, EvidenceOptions{
+		Namespace: r.options.Namespace, RunID: result.RunID,
+		Experiment: "benchmark-" + result.Profile, OutputDir: r.options.EvidenceDir,
+		Expected: expected, Observed: observed,
+	})
+	if err != nil {
+		return "", err
+	}
+	return collector.Collect(ctx)
 }
 
 func (r *BenchmarkRunner) createAIJob(
@@ -211,7 +299,7 @@ func (r *BenchmarkRunner) createAIJob(
 		Spec: aiv1alpha1.AIJobSpec{
 			Workers: definition.Workers, GPUPerWorker: definition.GPUPerWorker,
 			GPUResource: string(topology.GPUResource),
-			QueueName:   aiv1alpha1.DefaultQueueName,
+			QueueName:   manifests.BenchmarkQueueName,
 			Topology:    aiv1alpha1.Topology{Preference: "any"},
 			Image:       "ai-infra-lab:dev", Args: append([]string(nil), definition.Args...),
 		},
@@ -238,12 +326,14 @@ func (r *BenchmarkRunner) validateFixtures(ctx context.Context) (ClusterCapacity
 		}
 	}
 	queue := &ClusterQueue{}
-	if err := r.cluster.Client.Get(ctx, types.NamespacedName{Name: "training"}, queue); err != nil {
-		return ClusterCapacity{}, fmt.Errorf("get ClusterQueue training: %w", err)
+	queueName := manifests.BenchmarkQueueName
+	if err := r.cluster.Client.Get(ctx, types.NamespacedName{Name: queueName}, queue); err != nil {
+		return ClusterCapacity{}, fmt.Errorf("get ClusterQueue %s: %w", queueName, err)
 	}
 	if quota := simulatedGPUQuota(queue); quota < 10 {
 		return ClusterCapacity{}, fmt.Errorf(
-			"ClusterQueue training has %d simulated GPUs, benchmark requires at least 10", quota,
+			"ClusterQueue %s has %d simulated GPUs, benchmark requires at least 10",
+			queueName, quota,
 		)
 	}
 	return ClusterCapacity{EligibleNodes: 3, GPUPerNode: 4, TotalGPUs: 12}, nil
@@ -369,6 +459,11 @@ func (r *BenchmarkRunner) collectResult(ctx context.Context, result *BenchmarkRe
 		return err
 	}
 	result.Measurements.UnschedulableCount = UnschedulableCount(snapshot.Pods)
+	logs, logErr := r.cluster.WorkerLogs(ctx, snapshot.Pods)
+	result.Workers, err = workerRuntimeReports(snapshot.Pods, logs)
+	if err != nil || logErr != nil {
+		return errors.Join(err, logErr)
+	}
 	result.Placements = make([]PodPlacement, 0, len(snapshot.Pods))
 	for _, pod := range snapshot.Pods {
 		result.Placements = append(result.Placements, PodPlacement{

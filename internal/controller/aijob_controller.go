@@ -31,6 +31,11 @@ const queueRetryDelay = 30 * time.Second
 
 var _ reconcile.Reconciler = &AIJobReconciler{}
 
+// +kubebuilder:rbac:groups=infra.example.io,resources=aijobs,verbs=get;list;watch
+// +kubebuilder:rbac:groups=infra.example.io,resources=aijobs/status,verbs=get;patch;update
+// +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=jobsets,verbs=create;get;list;patch;update;watch
+// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=localqueues,verbs=get;list;watch
+
 // AIJobReconciler adapts the AIJob API to the standard JobSet API.
 type AIJobReconciler struct {
 	client.Client
@@ -196,7 +201,9 @@ func reconcileOwnedFields(actual, desired *jobsetv1alpha2.JobSet) {
 		}
 	}
 
-	actual.Spec.Suspend = desired.Spec.Suspend
+	if desired.Spec.Suspend != nil {
+		actual.Spec.Suspend = desired.Spec.Suspend
+	}
 	if actual.CreationTimestamp.IsZero() {
 		actual.Spec.ReplicatedJobs = desired.Spec.ReplicatedJobs
 		actual.Spec.Network = desired.Spec.Network

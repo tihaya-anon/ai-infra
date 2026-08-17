@@ -145,6 +145,7 @@ func runBenchmark(ctx context.Context, args []string) error {
 	clusterName := flags.String("cluster", "ai-infra-lab", "explicit kind cluster name")
 	namespace := flags.String("namespace", "default", "workload namespace")
 	output := flags.String("output", "out/benchmark", "result directory")
+	evidenceOutput := flags.String("evidence-output", "out/evidence", "evidence directory")
 	timeout := flags.Duration("timeout", 2*time.Minute, "per-observation timeout")
 	repetitions := flags.Int("repetitions", 1, "runs per profile")
 	baseline := flags.String(
@@ -164,7 +165,8 @@ func runBenchmark(ctx context.Context, args []string) error {
 		return err
 	}
 	runner, err := lab.NewBenchmarkRunner(cluster, lab.BenchmarkOptions{
-		Namespace: *namespace, OutputDir: *output, Timeout: *timeout,
+		Namespace: *namespace, OutputDir: *output, EvidenceDir: *evidenceOutput,
+		Timeout:     *timeout,
 		Repetitions: *repetitions,
 		Profiles: []lab.Profile{
 			{Name: "baseline", ConfigPath: *baseline, ProbeShouldFit: false},

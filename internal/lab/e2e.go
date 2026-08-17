@@ -53,7 +53,7 @@ func (r *E2ERunner) Run(ctx context.Context) error {
 	}
 	var scenarioErrors []error
 	for _, scenario := range scenarios {
-		runID := newRunID("e2e-" + scenario.name)
+		runID := newRunID(e2eRunPrefix(scenario.name))
 		observed, err := scenario.run(ctx, runID)
 		if err != nil {
 			collector, collectorErr := NewEvidenceCollector(r.cluster, EvidenceOptions{
@@ -78,6 +78,19 @@ func (r *E2ERunner) Run(ctx context.Context) error {
 		cancel()
 	}
 	return errors.Join(scenarioErrors...)
+}
+
+func e2eRunPrefix(scenario string) string {
+	switch scenario {
+	case "success":
+		return "e2e-ok"
+	case "selected-worker-failure":
+		return "e2e-fail"
+	case "controller-restart-cleanup":
+		return "e2e-restart"
+	default:
+		return "e2e"
+	}
 }
 
 func (r *E2ERunner) runSuccess(ctx context.Context, runID string) ([]string, error) {

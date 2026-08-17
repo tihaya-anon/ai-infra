@@ -461,7 +461,8 @@ Kueue 是 Job 级管理器，不替代 kube-scheduler。它在任务开始创建
 - Worker 应位于哪个 rack、block 或其他拓扑域。
 
 AIJob 通过 JobSet 使用 Kueue 已有集成，不需要重新实现 Kueue 的 `GenericJob` 接口。
-本实验预置 `training` 和 `batch` 两个 LocalQueue；Controller 将 `spec.queueName` 转换为
+本实验为业务任务预置 `training` 和 `batch` 两个 LocalQueue，并为受控碎片实验保留
+`benchmark` LocalQueue；Controller 将 `spec.queueName` 转换为
 JobSet 的 Kueue queue label。指定的 LocalQueue 不存在时，Controller 不创建 JobSet，并在
 AIJob 的 `QueueReady=False` condition 中记录 `QueueNotFound`。
 
@@ -1110,11 +1111,11 @@ flowchart TD
 `Dockerfile` 不会向 Kubernetes 注册任何对象。它只做镜像构建：
 
 1. 在 Go builder 镜像中下载依赖；
-2. 编译三个 Linux 静态二进制：`controller`、`scheduler`、`worker`；
-3. 把这三个二进制复制进 distroless 运行时镜像；
+2. 编译四个 Linux 静态二进制：`controller`、`scheduler`、`worker`、`simulated-device-plugin`；
+3. 把这四个二进制复制进 distroless 运行时镜像；
 4. 得到同一个业务镜像 `ai-infra-lab:dev`。
 
-这个镜像里同时有三个入口程序，但镜像本身只是一个文件系统和启动命令集合。它不会创建
+这个镜像里同时有四个入口程序，但镜像本身只是一个文件系统和启动命令集合。它不会创建
 CRD，不会启动 Controller，也不会把 Scheduler 插件注册到集群。`make deploy` 里的
 `kind load docker-image` 会把这个本地业务镜像塞进 kind 节点，避免节点再去远端 registry 拉取。
 JobSet 和 Kueue 控制器镜像也会在安装官方清单前预加载到 kind 节点。
@@ -1124,10 +1125,12 @@ JobSet 和 Kueue 控制器镜像也会在安装官方清单前预加载到 kind 
 | 文件 | 创建什么 | 怎么理解 |
 | --- | --- | --- |
 | `deploy/crd.yaml` | `CustomResourceDefinition/aijobs.infra.example.io` | 由 `api/v1alpha1/aijob_types.go` 生成，向 API Server 注册新的资源类型 `AIJob`。注册后，用户才可以提交 `kind: AIJob` 的 YAML。 |
-| `deploy/rbac.yaml` | Namespace、ServiceAccount、ClusterRole、RoleBinding 等 | 给 Controller 和自定义 Scheduler 准备运行身份与权限。 |
+| `deploy/rbac.yaml` | `ClusterRole/aijob-controller` | 由 Controller 源码上的 kubebuilder RBAC marker 生成，声明 Reconciler 访问 API 所需的最小权限。 |
+| `deploy/access.yaml` | Namespace、ServiceAccount、ClusterRoleBinding、RoleBinding | 静态部署接线：把生成的 Controller 权限和 Kubernetes 内置 Scheduler 权限绑定到运行身份。 |
 | `deploy/kueue-resources.yaml` | `Topology`、`ResourceFlavor`、`ClusterQueue`、`LocalQueue` | 由 `internal/manifests/kueue.go` 生成，创建 Kueue 的资源实例。它们的 CRD 已经由前面的 Kueue 安装步骤提供。 |
 | `deploy/controller.yaml` | `Deployment/aijob-controller` 和 metrics `Service` | 在集群里启动 `/controller` 进程。这个进程 watch `AIJob`，并创建/更新 JobSet。 |
 | `deploy/scheduler-config.yaml` | Scheduler `ConfigMap`、`Deployment/ai-scheduler` 和 metrics `Service` | 在集群里启动 `/scheduler` 进程，并通过配置启用 `GPUTopology` score 插件。 |
+| `deploy/device-plugin.yaml` | `DaemonSet/simulated-gpu-device-plugin` | 在实验 Worker Node 上向 kubelet 注册四个 `example.com/gpu` 模拟设备。 |
 
 注意，Kubernetes 不根据 YAML 文件名创建资源。文件名只是给人看的分组；API Server 只看每个
 document 里的 `apiVersion`、`kind`、`metadata.name` 和 `metadata.namespace`。一个 YAML 文件可以包含多个
@@ -1154,6 +1157,11 @@ CRD
 队列的职责分成两层：平台维护者在 `internal/manifests/kueue.go` 配置可用队列、配额和 cohort，
 业务用户在 AIJob 的 `spec.queueName` 中引用同 namespace 的 LocalQueue。修改前者后运行
 `make generate` 更新部署清单。
+
+生成物包括 `deploy/crd.yaml`、`deploy/rbac.yaml`、`deploy/kueue-resources.yaml` 和 API deepcopy/schema；
+`deploy/access.yaml`、`controller.yaml`、`scheduler-config.yaml`、scheduler profiles 与依赖 Kustomization
+是教学环境的静态入口。修改 Go 类型、权限 marker 或队列定义后运行 `make generate`；`make verify`
+会拒绝过期的 CRD/RBAC。
 
 Controller 和 Scheduler 的“注册”方式也不同：
 
@@ -1207,10 +1215,11 @@ make deploy CLUSTER=ai-infra-lab-v134 EXTERNAL_IMAGE_MIRROR=
 
 `make deploy` 仍会从 GitHub Release 安装 JobSet 和 Kueue 清单；镜像拉取则由上面的预加载步骤处理。
 
-kind 没有 GPU Device Plugin。`scripts/label-nodes.sh` 会：
+kind 没有真实 GPU Device Plugin。本项目部署的模拟 Device Plugin 与 `scripts/label-nodes.sh` 会：
 
 1. 给 Node 添加模拟的 fabric 和 rack 标签；
-2. 在 Node status 中加入 `example.com/gpu` 扩展资源。
+2. 在每个实验 Worker Node 的 kubelet socket 上注册四个 `example.com/gpu` 设备；
+3. 等待 Node 的 allocatable 扩展资源可见。
 
 示例因此使用 `example.com/gpu`。生产环境应安装 GPU Operator、Device Plugin 或 DRA Driver，并改用真实资源与设备属性。
 
@@ -1332,7 +1341,8 @@ make clean CLUSTER=ai-infra-lab-v134
 make benchmark CLUSTER=ai-infra-lab-v134
 ```
 
-runner 会顺序运行 `LeastAllocated` baseline 与 `MostAllocated` optimized profile，每次提交三个
+runner 会在不启用 Kueue TAS 的专用 `benchmark` 队列中，顺序运行 `LeastAllocated` baseline 与
+`MostAllocated` optimized profile，每次提交三个
 2-GPU holder，再提交一个 4-GPU probe。它会恢复原 Scheduler 配置，并为每个 profile/repetition
 写一份 schema-versioned JSON。模拟 GPU 只能证明调度与资源记账行为，不能推导真实 GPU 利用率、
 NVLink 带宽或训练吞吐。

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/yaml"
 )
 
@@ -20,6 +21,7 @@ const EvidenceSchemaVersion = "v1"
 type EvidenceSource interface {
 	Discover(context.Context, string, string) (Snapshot, error)
 	ComponentLogs(context.Context) (map[string][]byte, error)
+	WorkerLogs(context.Context, []corev1.Pod) (map[string][]byte, error)
 	MetricsSnapshot(context.Context, string, int) ([]byte, error)
 }
 
@@ -102,6 +104,7 @@ func (c *EvidenceCollector) Collect(ctx context.Context) (string, error) {
 				manifest.Files[name] = path
 			}
 		}
+		c.collectWorkerReports(ctx, root, snapshot.Pods, &manifest)
 	}
 
 	logs, err := c.source.ComponentLogs(ctx)
@@ -154,6 +157,36 @@ func (c *EvidenceCollector) Collect(ctx context.Context) (string, error) {
 		return root, fmt.Errorf("evidence bundle %s is incomplete", root)
 	}
 	return root, nil
+}
+
+func (c *EvidenceCollector) collectWorkerReports(
+	ctx context.Context,
+	root string,
+	pods []corev1.Pod,
+	manifest *EvidenceManifest,
+) {
+	logs, logErr := c.source.WorkerLogs(ctx, pods)
+	if logErr != nil {
+		manifest.Missing = append(manifest.Missing, "worker logs: "+logErr.Error())
+	}
+	for pod, data := range logs {
+		path := filepath.Join("logs", "workers", safeName(pod)+".ndjson")
+		if err := writeFile(filepath.Join(root, path), data); err != nil {
+			manifest.Missing = append(manifest.Missing, path+": "+err.Error())
+		} else {
+			manifest.Files["worker-log-"+pod] = path
+		}
+	}
+	reports, err := workerRuntimeReports(pods, logs)
+	if err != nil {
+		manifest.Missing = append(manifest.Missing, "worker reports: "+err.Error())
+	}
+	path := filepath.Join("resources", "workers.json")
+	if err := writeJSON(filepath.Join(root, path), reports); err != nil {
+		manifest.Missing = append(manifest.Missing, path+": "+err.Error())
+	} else {
+		manifest.Files["workers"] = path
+	}
 }
 
 func writeYAML(path string, value any) error {

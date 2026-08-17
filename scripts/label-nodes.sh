@@ -11,9 +11,26 @@ kubectl label --overwrite "${nodes[0]}" infra.example.io/gpu-node=true infra.exa
 kubectl label --overwrite "${nodes[1]}" infra.example.io/gpu-node=true infra.example.io/gpu-fabric=pcie infra.example.io/rack=rack-a
 kubectl label --overwrite "${nodes[2]}" infra.example.io/gpu-node=true infra.example.io/gpu-fabric=pcie infra.example.io/rack=rack-b
 
-for node in "${nodes[@]:0:3}"; do
-  kubectl patch "$node" --subresource=status --type=merge \
-    -p '{"status":{"capacity":{"example.com/gpu":"4"},"allocatable":{"example.com/gpu":"4"}}}'
+kubectl -n ai-infra-system rollout status \
+  daemonset/simulated-gpu-device-plugin --timeout=120s
+
+for attempt in {1..24}; do
+  ready=true
+  for node in "${nodes[@]:0:3}"; do
+    value="$(kubectl get "$node" -o jsonpath='{.status.allocatable.example\.com/gpu}')"
+    if [[ "$value" != "4" ]]; then
+      ready=false
+      break
+    fi
+  done
+  if [[ "$ready" == "true" ]]; then
+    break
+  fi
+  if [[ "$attempt" == "24" ]]; then
+    echo "simulated GPU device plugin did not register four devices per worker" >&2
+    exit 1
+  fi
+  sleep 5
 done
 
 kubectl get nodes -L infra.example.io/gpu-node,infra.example.io/gpu-fabric,infra.example.io/rack

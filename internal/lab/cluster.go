@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -295,6 +296,39 @@ func (c *Cluster) ComponentLogs(ctx context.Context) (map[string][]byte, error) 
 		}
 	}
 	return result, nil
+}
+
+// WorkerLogs retrieves available logs for worker containers in a run snapshot.
+func (c *Cluster) WorkerLogs(
+	ctx context.Context,
+	pods []corev1.Pod,
+) (map[string][]byte, error) {
+	result := make(map[string][]byte)
+	var logErrors []error
+	for _, pod := range pods {
+		if !workerContainerStarted(pod.Status.ContainerStatuses) {
+			continue
+		}
+		data, err := c.Core.CoreV1().Pods(pod.Namespace).GetLogs(
+			pod.Name, &corev1.PodLogOptions{Container: "worker"},
+		).DoRaw(ctx)
+		if err != nil {
+			logErrors = append(logErrors, fmt.Errorf("worker log %s: %w", pod.Name, err))
+			continue
+		}
+		result[pod.Name] = data
+	}
+	return result, errors.Join(logErrors...)
+}
+
+func workerContainerStarted(statuses []corev1.ContainerStatus) bool {
+	for _, status := range statuses {
+		if status.Name == "worker" &&
+			(status.State.Running != nil || status.State.Terminated != nil) {
+			return true
+		}
+	}
+	return false
 }
 
 // MetricsSnapshot retrieves a Service metrics path through the Kubernetes API proxy.

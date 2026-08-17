@@ -1,0 +1,36 @@
+# Static teaching fixture: registers four logical GPUs on each labeled kind worker.
+# yaml-language-server: $schema=https://raw.githubusercontent.com/yannh/kubernetes-json-schema/master/v1.34.1-standalone-strict/all.json
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: simulated-gpu-device-plugin
+  namespace: ai-infra-system
+spec:
+  selector:
+    matchLabels:
+      app: simulated-gpu-device-plugin
+  template:
+    metadata:
+      labels:
+        app: simulated-gpu-device-plugin
+    spec:
+      nodeSelector:
+        infra.example.io/gpu-node: "true"
+      containers:
+        - name: device-plugin
+          image: ai-infra-lab:dev
+          imagePullPolicy: IfNotPresent
+          command: ["/simulated-device-plugin"]
+          args: ["--devices=4"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsUser: 0
+          volumeMounts:
+            - name: device-plugin
+              mountPath: /var/lib/kubelet/device-plugins
+      volumes:
+        - name: device-plugin
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+            type: Directory

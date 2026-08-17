@@ -13,12 +13,15 @@ import (
 )
 
 const (
-	topologyName  = "gpu-topology"
-	defaultNS     = "default"
-	sharedCohort  = "shared-gpu"
-	gpuNodeLabel  = "infra.example.io/gpu-node"
-	rackNodeLabel = "infra.example.io/rack"
-	gpuResource   = corev1.ResourceName("example.com/gpu")
+	BenchmarkQueueName = "benchmark"
+
+	topologyName        = "gpu-topology"
+	schedulerFlavorName = "gpu-scheduler"
+	defaultNS           = "default"
+	sharedCohort        = "shared-gpu"
+	gpuNodeLabel        = "infra.example.io/gpu-node"
+	rackNodeLabel       = "infra.example.io/rack"
+	gpuResource         = corev1.ResourceName("example.com/gpu")
 )
 
 type queueConfig struct {
@@ -26,11 +29,22 @@ type queueConfig struct {
 	cpuQuota    string
 	memoryQuota string
 	gpuQuota    string
+	flavorName  string
 }
 
 var queueConfigs = []queueConfig{
-	{name: "training", cpuQuota: "80", memoryQuota: "80Gi", gpuQuota: "10"},
-	{name: "batch", cpuQuota: "20", memoryQuota: "20Gi", gpuQuota: "2"},
+	{
+		name: "training", cpuQuota: "80", memoryQuota: "80Gi", gpuQuota: "10",
+		flavorName: topologyName,
+	},
+	{
+		name: "batch", cpuQuota: "20", memoryQuota: "20Gi", gpuQuota: "2",
+		flavorName: topologyName,
+	},
+	{
+		name: BenchmarkQueueName, cpuQuota: "80", memoryQuota: "80Gi", gpuQuota: "12",
+		flavorName: schedulerFlavorName,
+	},
 }
 
 // RenderKueueResources renders the Kueue configuration owned by this project.
@@ -71,7 +85,10 @@ func marshalResource(object any) ([]byte, error) {
 
 func kueueResources() []any {
 	apiVersion := kueuev1beta1.GroupVersion.String()
-	resources := []any{topology(apiVersion), resourceFlavor(apiVersion)}
+	resources := []any{
+		topology(apiVersion), topologyResourceFlavor(apiVersion),
+		schedulerResourceFlavor(apiVersion),
+	}
 	for _, config := range queueConfigs {
 		resources = append(resources, clusterQueue(apiVersion, config), localQueue(apiVersion, config))
 	}
@@ -89,7 +106,7 @@ func topology(apiVersion string) *kueuev1beta1.Topology {
 	}
 }
 
-func resourceFlavor(apiVersion string) *kueuev1beta1.ResourceFlavor {
+func topologyResourceFlavor(apiVersion string) *kueuev1beta1.ResourceFlavor {
 	topologyReference := kueuev1beta1.TopologyReference(topologyName)
 	return &kueuev1beta1.ResourceFlavor{
 		TypeMeta:   metav1.TypeMeta{APIVersion: apiVersion, Kind: "ResourceFlavor"},
@@ -97,6 +114,16 @@ func resourceFlavor(apiVersion string) *kueuev1beta1.ResourceFlavor {
 		Spec: kueuev1beta1.ResourceFlavorSpec{
 			NodeLabels:   map[string]string{gpuNodeLabel: "true"},
 			TopologyName: &topologyReference,
+		},
+	}
+}
+
+func schedulerResourceFlavor(apiVersion string) *kueuev1beta1.ResourceFlavor {
+	return &kueuev1beta1.ResourceFlavor{
+		TypeMeta:   metav1.TypeMeta{APIVersion: apiVersion, Kind: "ResourceFlavor"},
+		ObjectMeta: metav1.ObjectMeta{Name: schedulerFlavorName},
+		Spec: kueuev1beta1.ResourceFlavorSpec{
+			NodeLabels: map[string]string{gpuNodeLabel: "true"},
 		},
 	}
 }
@@ -115,7 +142,7 @@ func clusterQueue(apiVersion string, config queueConfig) *kueuev1beta1.ClusterQu
 					gpuResource,
 				},
 				Flavors: []kueuev1beta1.FlavorQuotas{{
-					Name: kueuev1beta1.ResourceFlavorReference(topologyName),
+					Name: kueuev1beta1.ResourceFlavorReference(config.flavorName),
 					Resources: []kueuev1beta1.ResourceQuota{
 						{Name: corev1.ResourceCPU, NominalQuota: resource.MustParse(config.cpuQuota)},
 						{Name: corev1.ResourceMemory, NominalQuota: resource.MustParse(config.memoryQuota)},

@@ -15,6 +15,9 @@ type manifest struct {
 		Name string `yaml:"name"`
 	} `yaml:"metadata"`
 	Spec struct {
+		Strategy struct {
+			Type string `yaml:"type"`
+		} `yaml:"strategy"`
 		Ports []struct {
 			Port int `yaml:"port"`
 		} `yaml:"ports"`
@@ -44,6 +47,7 @@ func TestGivenManifestsWhenReadingMetricsThenServicesAndBindingAreExposed(t *tes
 
 	// then
 	assert.Expect(args).To(gomega.ContainElement("--bind-address=0.0.0.0"))
+	assert.Expect(deployment.Spec.Strategy.Type).To(gomega.Equal("Recreate"))
 }
 
 func readManifests(t *testing.T, path string) []manifest {

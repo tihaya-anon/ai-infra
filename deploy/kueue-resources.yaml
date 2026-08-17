@@ -19,6 +19,14 @@ spec:
   topologyName: gpu-topology
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
+kind: ResourceFlavor
+metadata:
+  name: gpu-scheduler
+spec:
+  nodeLabels:
+    infra.example.io/gpu-node: "true"
+---
+apiVersion: kueue.x-k8s.io/v1beta1
 kind: ClusterQueue
 metadata:
   name: training
@@ -77,3 +85,33 @@ metadata:
   namespace: default
 spec:
   clusterQueue: batch
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ClusterQueue
+metadata:
+  name: benchmark
+spec:
+  cohort: shared-gpu
+  namespaceSelector: {}
+  resourceGroups:
+  - coveredResources:
+    - cpu
+    - memory
+    - example.com/gpu
+    flavors:
+    - name: gpu-scheduler
+      resources:
+      - name: cpu
+        nominalQuota: "80"
+      - name: memory
+        nominalQuota: 80Gi
+      - name: example.com/gpu
+        nominalQuota: "12"
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: LocalQueue
+metadata:
+  name: benchmark
+  namespace: default
+spec:
+  clusterQueue: benchmark

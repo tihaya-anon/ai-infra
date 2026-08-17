@@ -221,6 +221,24 @@ func TestGivenExistingJobSetWhenReconcilingSuspendThenSuspendIsUpdated(t *testin
 	assert.Expect(*actual.Spec.Suspend).To(gomega.BeTrue())
 }
 
+func TestGivenNoSuspendOverrideWhenReconcilingThenKueueSuspendIsPreserved(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
+	actual := &jobsetv1alpha2.JobSet{
+		ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.Now()},
+		Spec:       jobsetv1alpha2.JobSetSpec{Suspend: boolPtr(true)},
+	}
+	desired := desiredJobSet(testAIJob("any"))
+
+	// when
+	reconcileOwnedFields(actual, desired)
+
+	// then
+	assert.Expect(actual.Spec.Suspend).NotTo(gomega.BeNil())
+	assert.Expect(*actual.Spec.Suspend).To(gomega.BeTrue())
+}
+
 func TestGivenExistingLabelsWhenReconcilingOwnedFieldsThenExternalLabelsArePreserved(t *testing.T) {
 	assert := gomega.NewWithT(t)
 

@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -36,12 +37,23 @@ type Config struct {
 
 // Record is one newline-delimited lifecycle observation.
 type Record struct {
-	Type            string `json:"type"`
-	Timestamp       string `json:"timestamp"`
-	Mode            string `json:"mode"`
-	CompletionIndex *int   `json:"completionIndex,omitempty"`
-	Duration        string `json:"duration"`
-	Outcome         string `json:"outcome"`
+	Type            string           `json:"type"`
+	Timestamp       string           `json:"timestamp"`
+	Mode            string           `json:"mode"`
+	CompletionIndex *int             `json:"completionIndex,omitempty"`
+	Duration        string           `json:"duration"`
+	Outcome         string           `json:"outcome"`
+	Parameters      ParameterSummary `json:"parameters"`
+	ExitReason      string           `json:"exitReason,omitempty"`
+	ExitCode        *int             `json:"exitCode,omitempty"`
+}
+
+// ParameterSummary is the bounded, normalized worker input recorded for diagnostics.
+type ParameterSummary struct {
+	Mode         string `json:"mode"`
+	Duration     string `json:"duration"`
+	StartupDelay string `json:"startupDelay"`
+	FailIndexes  []int  `json:"failIndexes,omitempty"`
 }
 
 // Run validates args, executes the selected mode, and returns a stable exit code.
@@ -59,29 +71,29 @@ func Run(
 	}
 
 	encoder := json.NewEncoder(stdout)
-	writeRecord(encoder, config, "start", "started")
+	writeRecord(encoder, config, "start", "started", nil)
 	if !wait(ctx, config.StartupDelay) {
-		writeRecord(encoder, config, "result", "terminated")
+		writeRecord(encoder, config, "result", "terminated", intPtr(ExitTermination))
 		return ExitTermination
 	}
 
 	switch config.Mode {
 	case ModeWait:
 		<-ctx.Done()
-		writeRecord(encoder, config, "result", "terminated")
+		writeRecord(encoder, config, "result", "terminated", intPtr(ExitTermination))
 		return ExitTermination
 	case ModeComplete:
 		if !wait(ctx, config.Duration) {
-			writeRecord(encoder, config, "result", "terminated")
+			writeRecord(encoder, config, "result", "terminated", intPtr(ExitTermination))
 			return ExitTermination
 		}
 		if config.Index != nil {
 			if _, selected := config.FailIndexes[*config.Index]; selected {
-				writeRecord(encoder, config, "result", "failed")
+				writeRecord(encoder, config, "result", "failed", intPtr(ExitFailure))
 				return ExitFailure
 			}
 		}
-		writeRecord(encoder, config, "result", "succeeded")
+		writeRecord(encoder, config, "result", "succeeded", intPtr(ExitSuccess))
 		return ExitSuccess
 	default:
 		panic("validated worker mode is not implemented")
@@ -168,10 +180,31 @@ func wait(ctx context.Context, duration time.Duration) bool {
 	}
 }
 
-func writeRecord(encoder *json.Encoder, config Config, recordType, outcome string) {
+func writeRecord(
+	encoder *json.Encoder,
+	config Config,
+	recordType, outcome string,
+	exitCode *int,
+) {
+	failIndexes := make([]int, 0, len(config.FailIndexes))
+	for index := range config.FailIndexes {
+		failIndexes = append(failIndexes, index)
+	}
+	sort.Ints(failIndexes)
+	exitReason := ""
+	if recordType == "result" {
+		exitReason = outcome
+	}
 	_ = encoder.Encode(Record{
 		Type: recordType, Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Mode: config.Mode, CompletionIndex: config.Index,
 		Duration: config.Duration.String(), Outcome: outcome,
+		Parameters: ParameterSummary{
+			Mode: config.Mode, Duration: config.Duration.String(),
+			StartupDelay: config.StartupDelay.String(), FailIndexes: failIndexes,
+		},
+		ExitReason: exitReason, ExitCode: exitCode,
 	})
 }
+
+func intPtr(value int) *int { return &value }

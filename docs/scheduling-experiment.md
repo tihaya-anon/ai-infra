@@ -1,8 +1,8 @@
 # 调度碎片对照实验
 
 这份实验不是为了证明 `MostAllocated` 永远优于 `LeastAllocated`，而是练习怎样提出一个可证伪的
-调度假设、控制变量、保留原始证据，再解释结果。这里的 GPU 是 kind Node status 中的
-`example.com/gpu` 扩展资源，不代表真实设备、利用率或通信性能。
+调度假设、控制变量、保留原始证据，再解释结果。这里的 GPU 是模拟 Device Plugin 向 kind kubelet
+注册的 `example.com/gpu` 扩展资源，不代表真实设备、利用率或通信性能。
 
 ## 一、先写下假设
 
@@ -10,10 +10,12 @@
 保持运行；随后 probe 请求四个 GPU。
 
 - baseline 使用 `NodeResourcesFit/LeastAllocated`，预期 holder 分散为 `[2,2,2]` 空闲量，probe
-  因没有单个 Node 能容纳四个 GPU 而 Unschedulable；
+  因没有单个 Node 能容纳四个 GPU 而 Unschedulable；runner 随后删除一个 2-GPU holder，验证
+  同一个 probe 能否恢复调度并完成；
 - optimized 使用 `MostAllocated`，预期 holder 更集中，可能形成 `[0,2,4]`，从而保留一个完整
   Node 给 probe；
-- 两份 profile 的其他 filter、Kueue quota、拓扑插件、节点、工作负载和提交顺序完全相同。
+- 两份 profile 的其他 filter、Kueue quota、拓扑插件、节点、工作负载和提交顺序完全相同；实验使用
+  不带 TAS 的专用 `benchmark` 队列，避免 Kueue 预选节点干扰 Scheduler profile 对照。
 
 这是 expected behavior。只有运行生成的 JSON 才能写进 measured results。
 
@@ -39,14 +41,17 @@ go run ./cmd/labctl benchmark \
   --cluster ai-infra-lab-v134 \
   --repetitions 3 \
   --timeout 2m \
-  --output out/benchmark
+  --output out/benchmark \
+  --evidence-output out/evidence
 make benchmark-validate
 ```
 
 每个 holder 都会等到 `PodScheduled=True` 后才提交下一个，所以异步调度不会改变提交顺序。两个
-profile 串行使用同一个 `ai-scheduler` 名称；runner 等待 Deployment rollout，结束时恢复原配置。
+profile 串行使用同一个 `ai-scheduler` 名称；该单副本 Deployment 使用 `Recreate`，runner 等待
+Deployment rollout 后再提交 workload，避免两个未启用 leader election 的 Scheduler 同时绑定 Pod。
 每个 profile 和 repetition 各写一个 JSON。超时文件仍会存在，但 `complete=false` 且 `missing`
-解释缺了什么，命令同时返回非零。
+解释缺了什么，命令同时返回非零。每次 run 还会在清理前写
+`out/evidence/<run-id>/manifest.json`，其中包括原始对象、控制面日志、Worker NDJSON/汇总和 metrics。
 
 ## 四、读懂指标，而不是只比较一个数字
 
@@ -66,13 +71,16 @@ JSON 还记录：
 - Pod 创建/提交到 PodScheduled condition 的 scheduling latency；
 - 场景开始到预期 probe condition 的 makespan；
 - 观察到 Unschedulable condition 的 Pod 数；
+- baseline 的 Unschedulable、holder 释放、恢复调度时间和恢复延迟；
 - Pod placement、completion index、outcome、软件版本和 cluster capacity。
+- 每个可观察 Worker 的启动/完成时间、参数摘要、退出原因和退出码。
 
 如果 optimized 的碎片率更低但 admission wait 更高，报告必须同时呈现，不能只选择支持假设的指标。
 
 ## 五、从原始对象解释偏差
 
-先打开 JSON 的 `missing`、`lifecycle`、`placements` 和 `fragmentation.freeByNode`。若结果不符合预期，
+先打开 JSON 的 `missing`、`lifecycle`、`placements`、`workers`、`measurements.recovery` 和
+`fragmentation.freeByNode`。若结果不符合预期，
 按顺序检查：Workload 是否已 Admitted、holder 是否真的逐个绑定、Pod 是否请求
 `example.com/gpu`、Scheduler 是否完成 profile rollout、events 中是否有其他 filter 失败。
 

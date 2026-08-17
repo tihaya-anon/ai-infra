@@ -4,7 +4,7 @@ kind: AIJob
 metadata:
   name: benchmark-holder
 spec:
-  queueName: training
+  queueName: benchmark
   workers: 1
   gpuPerWorker: 2
   gpuResource: example.com/gpu

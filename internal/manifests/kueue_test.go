@@ -40,3 +40,17 @@ func TestGeneratedKueueManifestIsCurrent(t *testing.T) {
 		t.Fatal("deploy/kueue-resources.yaml is stale; run make generate")
 	}
 }
+
+func TestBenchmarkQueueUsesSchedulerManagedFlavor(t *testing.T) {
+	resources := kueueResources()
+	for _, object := range resources {
+		flavor, ok := object.(*kueuev1beta1.ResourceFlavor)
+		if ok && flavor.Name == schedulerFlavorName {
+			if flavor.Spec.TopologyName != nil {
+				t.Fatal("benchmark flavor must leave Node selection to the Scheduler")
+			}
+			return
+		}
+	}
+	t.Fatal("benchmark ResourceFlavor was not generated")
+}
