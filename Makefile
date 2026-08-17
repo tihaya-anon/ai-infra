@@ -8,13 +8,14 @@ EXTERNAL_IMAGE_MIRROR ?= m.daocloud.io
 KIND_IMAGE_PLATFORM ?=
 HEADLAMP_NAMESPACE ?= kube-system
 HEADLAMP_ADMIN_SERVICE_ACCOUNT ?= headlamp-admin
+HEADLAMP_PORT ?= 4466
 JOBSET_IMAGE ?= registry.k8s.io/jobset/jobset:v0.10.1
 KUEUE_IMAGE ?= registry.k8s.io/kueue/kueue:v0.14.3
 GOIMPORTS := ./scripts/goimports.sh
 CONTROLLER_GEN := ./scripts/controller-gen.sh
 ENVTEST_K8S_VERSION ?= 1.34.0
 
-.PHONY: tools generate fmt fmt-check line-length vet test test-api test-e2e verify hooks build image cluster preload-external-images deploy demo headlamp headlamp-token headlamp-port-forward benchmark benchmark-validate failure-capacity failure-worker failure-restart clean
+.PHONY: tools generate fmt fmt-check line-length vet test test-api test-e2e verify hooks build image cluster preload-external-images deploy demo headlamp headlamp-token headlamp-port-forward headlamp-port-forward-stop benchmark benchmark-validate failure-capacity failure-worker failure-restart clean
 
 tools:
 	$(GOIMPORTS) --install
@@ -100,10 +101,17 @@ headlamp:
 	./scripts/install-headlamp.sh
 
 headlamp-token:
-	kubectl -n $(HEADLAMP_NAMESPACE) create token $(HEADLAMP_ADMIN_SERVICE_ACCOUNT) --duration=24h
+	@HEADLAMP_NAMESPACE=$(HEADLAMP_NAMESPACE) \
+	HEADLAMP_ADMIN_SERVICE_ACCOUNT=$(HEADLAMP_ADMIN_SERVICE_ACCOUNT) \
+	./scripts/headlamp-token.sh
 
 headlamp-port-forward:
-	kubectl -n $(HEADLAMP_NAMESPACE) port-forward --address 127.0.0.1 service/headlamp 4466:80
+	@HEADLAMP_NAMESPACE=$(HEADLAMP_NAMESPACE) HEADLAMP_PORT=$(HEADLAMP_PORT) \
+	./scripts/headlamp-port-forward.sh start
+
+headlamp-port-forward-stop:
+	@HEADLAMP_NAMESPACE=$(HEADLAMP_NAMESPACE) HEADLAMP_PORT=$(HEADLAMP_PORT) \
+	./scripts/headlamp-port-forward.sh stop
 
 benchmark:
 	go run ./cmd/labctl benchmark --cluster $(CLUSTER)
