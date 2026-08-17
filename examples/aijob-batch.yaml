@@ -2,14 +2,13 @@
 apiVersion: infra.example.io/v1alpha1
 kind: AIJob
 metadata:
-  name: required-nvlink-training
+  name: batch-training
 spec:
-  queueName: training
-  workers: 4
+  queueName: batch
+  workers: 1
   gpuPerWorker: 1
   gpuResource: example.com/gpu
   topology:
-    preference: nvlink
-    required: nvlink
+    preference: any
   image: ai-infra-lab:dev
   args: ["--mode=complete", "--duration=5s"]

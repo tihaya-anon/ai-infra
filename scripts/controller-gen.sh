@@ -7,7 +7,7 @@ controller_gen="$tool_dir/controller-gen"
 
 if [ ! -x "$controller_gen" ]; then
     mkdir -p "$tool_dir"
-    env GOTOOLCHAIN=go1.24.0 GOBIN="$tool_dir" \
+    env GOTOOLCHAIN=go1.25.0 GOBIN="$tool_dir" \
         go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.19.0
 fi
 

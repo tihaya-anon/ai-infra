@@ -61,7 +61,7 @@ Scheduler plugin 的入口应继续对齐 Scheduler Framework：`PreScore` / `Sc
 | Controller | 单一 happy path，少量 status | 幂等、冲突重试、server-side apply、finalizer、事件、条件语义稳定 |
 | Scheduler | 一个 `ScorePlugin` 演示节点偏好 | `PreFilter`/`Filter`/`PreScore`/`Score` 组合，缓存、性能预算、可解释打分 |
 | 资源发现 | kind label 和模拟扩展资源 | DRA、device plugin、NodeResourceTopology、厂商 API 或 inventory adapter |
-| Kueue | 固定 ClusterQueue/LocalQueue | 多租户队列、cohort、quota borrowing、准入策略、拓扑策略升级 |
+| Kueue | 两个生成式 ClusterQueue/LocalQueue 和简单 cohort | 多租户隔离、动态配额、准入策略、拓扑策略升级 |
 | 部署 | 静态 YAML | Helm/Kustomize、镜像签名、RBAC 收敛、Pod 安全、HA、rollout/rollback |
 | 观测 | 基础 metrics 和实验证据 | SLO、告警、审计日志、trace、debug endpoint、调度决策解释 |
 | 测试 | 单元、envtest、kind e2e | 升级测试、兼容测试、性能测试、故障注入、真实 GPU staging |

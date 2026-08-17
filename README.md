@@ -33,7 +33,7 @@ make benchmark CLUSTER=ai-infra-lab-v134
 部署后的 JobSet、Kueue、Scheduler、Worker 与垃圾回收。benchmark 结果默认写入忽略版本控制的
 `out/benchmark/`，没有真实执行就不应在报告中填写 measured 数据。
 
-`scripts/install-dev-deps.sh` 面向 Ubuntu/Debian Linux，安装 Go 1.24.0、kubectl 1.34.8、
+`scripts/install-dev-deps.sh` 面向 Ubuntu/Debian Linux，安装 Go 1.25.0、kubectl 1.34.8、
 kind、Docker Engine、make、Bash、pre-commit 和项目本地 Go 工具。`make headlamp`
 会在当前 kind 集群中安装 Headlamp，并创建本地实验用的管理员 ServiceAccount。
 

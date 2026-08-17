@@ -5,6 +5,13 @@ import (
 	jobsetv1alpha2 "sigs.k8s.io/jobset/api/jobset/v1alpha2"
 )
 
+const (
+	// DefaultQueueName is used when an AIJob does not select a LocalQueue.
+	DefaultQueueName = "training"
+	// ConditionQueueReady reports whether the selected LocalQueue exists.
+	ConditionQueueReady = "QueueReady"
+)
+
 // AIJobSpec describes the worker group and its preferred GPU topology.
 type AIJobSpec struct {
 	// Workers is the number of indexed worker Pods that must run as one workload.
@@ -19,6 +26,12 @@ type AIJobSpec struct {
 	// +kubebuilder:default=example.com/gpu
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="gpuResource is immutable"
 	GPUResource string `json:"gpuResource,omitempty"`
+	// QueueName selects a Kueue LocalQueue in the AIJob namespace.
+	// +kubebuilder:default=training
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="queueName is immutable"
+	QueueName string `json:"queueName,omitempty"`
 	// Topology requests a supported node-fabric preference or rack constraint.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="topology is immutable"
 	Topology Topology `json:"topology,omitempty"`
@@ -57,7 +70,7 @@ type JobSetOverrides struct {
 type AIJobStatus struct {
 	// ObservedGeneration identifies the AIJob spec represented by Conditions.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
-	// Conditions are projected from the JobSet owned by this AIJob.
+	// Conditions summarize queue validation and the owned JobSet lifecycle.
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
@@ -69,6 +82,7 @@ type AIJobStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:printcolumn:name="Workers",type=integer,JSONPath=".spec.workers"
+// +kubebuilder:printcolumn:name="Queue",type=string,JSONPath=".spec.queueName"
 // +kubebuilder:printcolumn:name="Completed",type=string,JSONPath=".status.conditions[?(@.type==\"Completed\")].status"
 // +kubebuilder:printcolumn:name="Failed",type=string,JSONPath=".status.conditions[?(@.type==\"Failed\")].status"
 type AIJob struct {

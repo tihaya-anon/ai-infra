@@ -21,12 +21,14 @@ const (
 	reconcileSuccess  reconcileResult = "success"
 	reconcileError    reconcileResult = "error"
 	reconcileNotFound reconcileResult = "not_found"
+	reconcileWaiting  reconcileResult = "waiting"
 )
 
 type errorOperation string
 
 const (
 	errorOperationGet    errorOperation = "get"
+	errorOperationQueue  errorOperation = "queue"
 	errorOperationJobSet errorOperation = "jobset"
 	errorOperationStatus errorOperation = "status"
 )

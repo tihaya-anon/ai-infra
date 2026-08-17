@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	controllermetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	jobsetv1alpha2 "sigs.k8s.io/jobset/api/jobset/v1alpha2"
+	kueuev1beta1 "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 )
 
 func main() {
@@ -20,6 +21,7 @@ func main() {
 	must(clientgoscheme.AddToScheme(scheme))
 	must(aiv1alpha1.AddToScheme(scheme))
 	must(jobsetv1alpha2.AddToScheme(scheme))
+	must(kueuev1beta1.AddToScheme(scheme))
 
 	manager, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{Scheme: scheme})
 	must(err)

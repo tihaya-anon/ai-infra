@@ -7,7 +7,7 @@ goimports="$tool_dir/goimports"
 
 if [ ! -x "$goimports" ]; then
     mkdir -p "$tool_dir"
-    env GOTOOLCHAIN=go1.24.0 GOBIN="$tool_dir" \
+    env GOTOOLCHAIN=go1.25.0 GOBIN="$tool_dir" \
         go install golang.org/x/tools/cmd/goimports@v0.42.0
 fi
 

@@ -1,7 +1,7 @@
 CLUSTER ?= ai-infra-lab
 IMAGE ?= ai-infra-lab:dev
 KIND_NODE_IMAGE ?= m.daocloud.io/docker.io/kindest/node:v1.34.8@sha256:02722c2dedddcfc00febf5d27fbeb9b7b2c14294c82109ff4a85d89ac9ba3256
-GO_BUILDER_IMAGE ?= m.daocloud.io/docker.io/library/golang:1.24.0
+GO_BUILDER_IMAGE ?= m.daocloud.io/docker.io/library/golang:1.25.0
 GOPROXY ?= https://goproxy.cn,direct
 RUNTIME_IMAGE ?= m.daocloud.io/gcr.io/distroless/static-debian12:nonroot
 EXTERNAL_IMAGE_MIRROR ?= m.daocloud.io
@@ -28,6 +28,7 @@ generate: tools
 	$(CONTROLLER_GEN) crd:maxDescLen=0 paths=./api/... output:crd:dir="$$tmp_dir"; \
 	cp "$$tmp_dir/infra.example.io_aijobs.yaml" deploy/crd.yaml
 	go run ./scripts/sync-aijob-schema.go
+	go run ./cmd/manifestgen
 	$(GOIMPORTS) -w ./api
 
 fmt:
@@ -54,6 +55,7 @@ test:
 test-api:
 	KUBEBUILDER_ASSETS="$$(./scripts/setup-envtest.sh $(ENVTEST_K8S_VERSION))" \
 	JOBSET_CRD_PATH="$$(go list -m -f '{{.Dir}}' sigs.k8s.io/jobset)/config/components/crd/bases/jobset.x-k8s.io_jobsets.yaml" \
+	KUEUE_LOCALQUEUE_CRD_PATH="$$(go list -m -f '{{.Dir}}' sigs.k8s.io/kueue)/config/components/crd/bases/kueue.x-k8s.io_localqueues.yaml" \
 	go test -tags=api_test ./internal/controller \
 		-run '^TestGivenAPIEnvironmentWhenReconcilingAIJobThenResourcesAndStatusAreProjected$$' \
 		-count=1

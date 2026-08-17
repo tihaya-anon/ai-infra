@@ -3,9 +3,8 @@ apiVersion: infra.example.io/v1alpha1
 kind: AIJob
 metadata:
   name: selected-worker-failure
-  labels:
-    kueue.x-k8s.io/queue-name: training
 spec:
+  queueName: training
   workers: 4
   gpuPerWorker: 1
   gpuResource: example.com/gpu

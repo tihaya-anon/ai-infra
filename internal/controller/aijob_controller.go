@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"time"
 
@@ -10,18 +11,23 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	jobsetv1alpha2 "sigs.k8s.io/jobset/api/jobset/v1alpha2"
+	kueuev1beta1 "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 )
 
 // SchedulerName selects the scheduler profile containing the GPU topology plugin.
 const SchedulerName = "ai-scheduler"
+
+const queueRetryDelay = 30 * time.Second
 
 var _ reconcile.Reconciler = &AIJobReconciler{}
 
@@ -38,33 +44,61 @@ func (r *AIJobReconciler) Reconcile(
 	request ctrl.Request,
 ) (ctrl.Result, error) {
 	started := time.Now()
-	done := func(result reconcileResult, err error) (ctrl.Result, error) {
+	done := func(output ctrl.Result, result reconcileResult, err error) (ctrl.Result, error) {
 		r.Metrics.observe(started, result)
-		return ctrl.Result{}, err
+		return output, err
 	}
 
 	job := &aiv1alpha1.AIJob{}
 	if err := r.Get(ctx, request.NamespacedName, job); err != nil {
 		if apierrors.IsNotFound(err) {
-			return done(reconcileNotFound, nil)
+			return done(ctrl.Result{}, reconcileNotFound, nil)
 		}
 		r.Metrics.recordError(errorOperationGet)
-		return done(reconcileError, client.IgnoreNotFound(err))
+		return done(ctrl.Result{}, reconcileError, client.IgnoreNotFound(err))
+	}
+
+	queueName := selectedQueueName(job.Spec.QueueName)
+	queue := &kueuev1beta1.LocalQueue{}
+	queueKey := types.NamespacedName{Name: queueName, Namespace: job.Namespace}
+	if err := r.Get(ctx, queueKey, queue); err != nil {
+		if apierrors.IsNotFound(err) {
+			conditions := append([]metav1.Condition(nil), job.Status.Conditions...)
+			status := statusWithQueue(
+				job.Generation, aiv1alpha1.AIJobStatus{Conditions: conditions},
+				job.Status.Conditions, queueName, false,
+			)
+			changed, statusErr := r.reconcileStatus(ctx, job, status)
+			if statusErr != nil {
+				r.Metrics.recordError(errorOperationStatus)
+				return done(ctrl.Result{}, reconcileError, statusErr)
+			}
+			r.Metrics.recordStatusChange(changed)
+			return done(
+				ctrl.Result{RequeueAfter: queueRetryDelay}, reconcileWaiting, nil,
+			)
+		}
+		r.Metrics.recordError(errorOperationQueue)
+		return done(ctrl.Result{}, reconcileError, err)
 	}
 
 	jobSet, operation, err := r.reconcileJobSet(ctx, job)
 	if err != nil {
 		r.Metrics.recordError(errorOperationJobSet)
-		return done(reconcileError, err)
+		return done(ctrl.Result{}, reconcileError, err)
 	}
 	r.Metrics.recordJobSetChange(operation)
-	changed, err := r.reconcileStatus(ctx, job, jobSet)
+	status := statusWithQueue(
+		job.Generation, statusFromJobSet(job.Generation, jobSet),
+		job.Status.Conditions, queueName, true,
+	)
+	changed, err := r.reconcileStatus(ctx, job, status)
 	if err != nil {
 		r.Metrics.recordError(errorOperationStatus)
-		return done(reconcileError, err)
+		return done(ctrl.Result{}, reconcileError, err)
 	}
 	r.Metrics.recordStatusChange(changed)
-	return done(reconcileSuccess, nil)
+	return done(ctrl.Result{}, reconcileSuccess, nil)
 }
 
 func (r *AIJobReconciler) reconcileJobSet(
@@ -92,9 +126,8 @@ func (r *AIJobReconciler) reconcileJobSet(
 func (r *AIJobReconciler) reconcileStatus(
 	ctx context.Context,
 	job *aiv1alpha1.AIJob,
-	jobSet *jobsetv1alpha2.JobSet,
+	status aiv1alpha1.AIJobStatus,
 ) (bool, error) {
-	status := statusFromJobSet(job.Generation, jobSet)
 	if reflect.DeepEqual(job.Status, status) {
 		return false, nil
 	}
@@ -125,9 +158,7 @@ func (r *AIJobReconciler) SetupWithManager(manager ctrl.Manager) error {
 func desiredJobSet(job *aiv1alpha1.AIJob) *jobsetv1alpha2.JobSet {
 	labels := topology.LabLabels(job.Labels)
 	labels[topology.JobLabel] = job.Name
-	if queue := job.Labels[topology.QueueLabel]; queue != "" {
-		labels[topology.QueueLabel] = queue
-	}
+	labels[topology.QueueLabel] = selectedQueueName(job.Spec.QueueName)
 	jobSet := &jobsetv1alpha2.JobSet{
 		ObjectMeta: metav1.ObjectMeta{Name: job.Name, Namespace: job.Namespace, Labels: labels},
 		Spec: jobsetv1alpha2.JobSetSpec{
@@ -258,6 +289,42 @@ func statusFromJobSet(generation int64, jobSet *jobsetv1alpha2.JobSet) aiv1alpha
 		status.Conditions[index].ObservedGeneration = generation
 	}
 	return status
+}
+
+func statusWithQueue(
+	generation int64,
+	status aiv1alpha1.AIJobStatus,
+	previous []metav1.Condition,
+	queueName string,
+	ready bool,
+) aiv1alpha1.AIJobStatus {
+	status.ObservedGeneration = generation
+	existing := apiMeta.FindStatusCondition(previous, aiv1alpha1.ConditionQueueReady)
+	current := apiMeta.FindStatusCondition(status.Conditions, aiv1alpha1.ConditionQueueReady)
+	if existing != nil && current == nil {
+		status.Conditions = append(status.Conditions, *existing)
+	}
+	condition := metav1.Condition{
+		Type:               aiv1alpha1.ConditionQueueReady,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: generation,
+		Reason:             "QueueNotFound",
+		Message:            fmt.Sprintf("LocalQueue %q does not exist", queueName),
+	}
+	if ready {
+		condition.Status = metav1.ConditionTrue
+		condition.Reason = "QueueFound"
+		condition.Message = fmt.Sprintf("LocalQueue %q is available", queueName)
+	}
+	apiMeta.SetStatusCondition(&status.Conditions, condition)
+	return status
+}
+
+func selectedQueueName(queueName string) string {
+	if queueName == "" {
+		return aiv1alpha1.DefaultQueueName
+	}
+	return queueName
 }
 
 func boolPtr(value bool) *bool { return &value }

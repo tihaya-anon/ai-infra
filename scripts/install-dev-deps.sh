@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-GO_VERSION="${GO_VERSION:-1.24.0}"
+GO_VERSION="${GO_VERSION:-1.25.0}"
 KUBECTL_VERSION="${KUBECTL_VERSION:-1.34.8}"
 KIND_VERSION="${KIND_VERSION:-v0.32.0}"
 GOPROXY_VALUE="${GOPROXY_VALUE:-https://goproxy.cn,direct}"

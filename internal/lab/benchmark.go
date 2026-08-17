@@ -205,13 +205,13 @@ func (r *BenchmarkRunner) createAIJob(
 		ObjectMeta: metav1.ObjectMeta{
 			Name: definition.Name, Namespace: r.options.Namespace,
 			Labels: map[string]string{
-				topology.QueueLabel: "training", topology.RunIDLabel: runID,
-				topology.ExperimentLabel: experiment,
+				topology.RunIDLabel: runID, topology.ExperimentLabel: experiment,
 			},
 		},
 		Spec: aiv1alpha1.AIJobSpec{
 			Workers: definition.Workers, GPUPerWorker: definition.GPUPerWorker,
 			GPUResource: string(topology.GPUResource),
+			QueueName:   aiv1alpha1.DefaultQueueName,
 			Topology:    aiv1alpha1.Topology{Preference: "any"},
 			Image:       "ai-infra-lab:dev", Args: append([]string(nil), definition.Args...),
 		},

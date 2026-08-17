@@ -13,9 +13,8 @@ apiVersion: infra.example.io/v1alpha1
 kind: AIJob
 metadata:
   name: demo-training
-  labels:
-    kueue.x-k8s.io/queue-name: training
 spec:
+  queueName: training
   workers: 4
   gpuPerWorker: 2
   gpuResource: nvidia.com/gpu
@@ -30,11 +29,11 @@ spec:
 - `workers`：分布式训练的 Worker 数量；
 - `gpuPerWorker`：每个 Worker 请求的 GPU 数量；
 - `gpuResource`：Device Plugin 或 DRA 暴露的资源名；
+- `queueName`：任务进入的 Kueue LocalQueue；省略时默认为 `training`；
 - `topology.preference`：实验中的软拓扑偏好，支持 `nvlink`、`pcie` 或 `any`；
 - `topology.required`：实验中的硬拓扑约束，支持 `nvlink`、`pcie`、`same-rack` 或 `any`；
 - `image`：训练镜像；
 - `args`：按声明顺序原样传给 Worker 容器；省略时保持长驻等待的兼容行为；
-- `kueue.x-k8s.io/queue-name`：任务进入的 LocalQueue。
 
 业务方不创建 Pod，不指定某个 Node，也不负责在代码中调用 Controller 或 Scheduler。各组件通过 Kubernetes API 中的资源协作。
 
@@ -462,6 +461,9 @@ Kueue 是 Job 级管理器，不替代 kube-scheduler。它在任务开始创建
 - Worker 应位于哪个 rack、block 或其他拓扑域。
 
 AIJob 通过 JobSet 使用 Kueue 已有集成，不需要重新实现 Kueue 的 `GenericJob` 接口。
+本实验预置 `training` 和 `batch` 两个 LocalQueue；Controller 将 `spec.queueName` 转换为
+JobSet 的 Kueue queue label。指定的 LocalQueue 不存在时，Controller 不创建 JobSet，并在
+AIJob 的 `QueueReady=False` condition 中记录 `QueueNotFound`。
 
 ### kube-scheduler 和设备层
 
@@ -1039,7 +1041,7 @@ profiles:
 
 ## 九、安装和运行
 
-本地实验固定使用 Kubernetes 1.34.8、Go 1.24、JobSet 0.10.1 和 Kueue 0.14.3，还需要 Docker、kubectl、kind、make 和 Bash，不需要真实 GPU。Go 依赖使用 Kubernetes 1.34.1，和集群保持相同 minor；`make deploy` 会安装固定版本的 JobSet 和 Kueue。
+本地实验固定使用 Kubernetes 1.34.8、Go 1.25、JobSet 0.10.1 和 Kueue 0.14.3，还需要 Docker、kubectl、kind、make 和 Bash，不需要真实 GPU。Go 依赖使用 Kubernetes 1.34.1，和集群保持相同 minor；`make deploy` 会安装固定版本的 JobSet 和 Kueue。
 
 Ubuntu/Debian Linux 可以直接安装本地依赖：
 
@@ -1047,7 +1049,7 @@ Ubuntu/Debian Linux 可以直接安装本地依赖：
 ./scripts/install-dev-deps.sh
 ```
 
-脚本安装 Go 1.24.0、kubectl 1.34.8、kind、Docker Engine、make、Bash、pre-commit，并运行 `make tools` 准备项目本地的 goimports。
+脚本安装 Go 1.25.0、kubectl 1.34.8、kind、Docker Engine、make、Bash、pre-commit，并运行 `make tools` 准备项目本地的 goimports。
 
 先确认本地工具可用：
 
@@ -1123,7 +1125,7 @@ JobSet 和 Kueue 控制器镜像也会在安装官方清单前预加载到 kind 
 | --- | --- | --- |
 | `deploy/crd.yaml` | `CustomResourceDefinition/aijobs.infra.example.io` | 由 `api/v1alpha1/aijob_types.go` 生成，向 API Server 注册新的资源类型 `AIJob`。注册后，用户才可以提交 `kind: AIJob` 的 YAML。 |
 | `deploy/rbac.yaml` | Namespace、ServiceAccount、ClusterRole、RoleBinding 等 | 给 Controller 和自定义 Scheduler 准备运行身份与权限。 |
-| `deploy/kueue-resources.yaml` | `Topology`、`ResourceFlavor`、`ClusterQueue`、`LocalQueue` | 创建 Kueue 的自定义资源实例。它们的 CRD 已经由前面的 Kueue 安装步骤提供。 |
+| `deploy/kueue-resources.yaml` | `Topology`、`ResourceFlavor`、`ClusterQueue`、`LocalQueue` | 由 `internal/manifests/kueue.go` 生成，创建 Kueue 的资源实例。它们的 CRD 已经由前面的 Kueue 安装步骤提供。 |
 | `deploy/controller.yaml` | `Deployment/aijob-controller` 和 metrics `Service` | 在集群里启动 `/controller` 进程。这个进程 watch `AIJob`，并创建/更新 JobSet。 |
 | `deploy/scheduler-config.yaml` | Scheduler `ConfigMap`、`Deployment/ai-scheduler` 和 metrics `Service` | 在集群里启动 `/scheduler` 进程，并通过配置启用 `GPUTopology` score 插件。 |
 
@@ -1148,6 +1150,10 @@ CRD
 `AIJob` 这一层是本项目自己的 CRD。`Kueue` 的 `Topology`、`ResourceFlavor`、`ClusterQueue` 和
 `LocalQueue` 也是自定义资源，但它们属于 Kueue；`make deploy` 先安装 Kueue 官方清单，随后才应用
 `deploy/kueue-resources.yaml` 创建这些实例。
+
+队列的职责分成两层：平台维护者在 `internal/manifests/kueue.go` 配置可用队列、配额和 cohort，
+业务用户在 AIJob 的 `spec.queueName` 中引用同 namespace 的 LocalQueue。修改前者后运行
+`make generate` 更新部署清单。
 
 Controller 和 Scheduler 的“注册”方式也不同：
 
@@ -1174,7 +1180,7 @@ make headlamp-token
 
 构建阶段包含三个外部来源：
 
-- builder 镜像原始来源是 Docker Hub 的 `golang:1.24.0`；
+- builder 镜像原始来源是 Docker Hub 的 `golang:1.25.0`；
 - distroless 原始镜像位于 `gcr.io`，Docker Hub mirror 不会代理它；
 - Go 模块默认从 `GOPROXY` 下载。
 
@@ -1188,7 +1194,7 @@ digest 固定基础镜像。切回官方地址：
 
 ```bash
 make image \
-  GO_BUILDER_IMAGE=golang:1.24.0 \
+  GO_BUILDER_IMAGE=golang:1.25.0 \
   GOPROXY=https://proxy.golang.org,direct \
   RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
 ```

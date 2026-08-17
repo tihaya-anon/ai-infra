@@ -3,8 +3,6 @@ apiVersion: infra.example.io/v1alpha1
 kind: AIJob
 metadata:
   name: demo-training
-  labels:
-    kueue.x-k8s.io/queue-name: training
 spec:
   workers: 4
   gpuPerWorker: 2

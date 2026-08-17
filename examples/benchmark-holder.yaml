@@ -3,9 +3,8 @@ apiVersion: infra.example.io/v1alpha1
 kind: AIJob
 metadata:
   name: benchmark-holder
-  labels:
-    kueue.x-k8s.io/queue-name: training
 spec:
+  queueName: training
   workers: 1
   gpuPerWorker: 2
   gpuResource: example.com/gpu

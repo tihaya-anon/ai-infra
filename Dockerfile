@@ -1,5 +1,5 @@
 ARG RUNTIME_IMAGE=m.daocloud.io/gcr.io/distroless/static-debian12:nonroot
-ARG GO_BUILDER_IMAGE=m.daocloud.io/docker.io/library/golang:1.24.0
+ARG GO_BUILDER_IMAGE=m.daocloud.io/docker.io/library/golang:1.25.0
 
 FROM ${GO_BUILDER_IMAGE} AS builder
 ARG GOPROXY=https://goproxy.cn,direct

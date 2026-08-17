@@ -1,13 +1,21 @@
 package controller
 
 import (
+	"context"
 	"testing"
 
 	"github.com/onsi/gomega"
 	aiv1alpha1 "github.com/tihaya-anon/ai-infra-lab/api/v1alpha1"
 	"github.com/tihaya-anon/ai-infra-lab/internal/topology"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	jobsetv1alpha2 "sigs.k8s.io/jobset/api/jobset/v1alpha2"
+	kueuev1beta1 "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 )
 
 func TestGivenAIJobWithSchedulingIntentWhenBuildingDesiredJobSetThenIntentIsCarried(t *testing.T) {
@@ -15,9 +23,9 @@ func TestGivenAIJobWithSchedulingIntentWhenBuildingDesiredJobSetThenIntentIsCarr
 
 	// given
 	job := testAIJob("nvlink")
+	job.Spec.QueueName = "batch"
 	job.Labels = map[string]string{
-		topology.QueueLabel: "training", topology.RunIDLabel: "run-1",
-		topology.ExperimentLabel: "benchmark",
+		topology.RunIDLabel: "run-1", topology.ExperimentLabel: "benchmark",
 	}
 
 	// when
@@ -27,7 +35,7 @@ func TestGivenAIJobWithSchedulingIntentWhenBuildingDesiredJobSetThenIntentIsCarr
 	gpuLimit := pod.Spec.Containers[0].Resources.Limits["nvidia.com/gpu"]
 
 	// then
-	assert.Expect(jobSet.Labels[topology.QueueLabel]).To(gomega.Equal("training"))
+	assert.Expect(jobSet.Labels[topology.QueueLabel]).To(gomega.Equal("batch"))
 	assert.Expect(worker.Parallelism).NotTo(gomega.BeNil())
 	assert.Expect(*worker.Parallelism).To(gomega.Equal(int32(4)))
 	assert.Expect(pod.Spec.SchedulerName).To(gomega.Equal(SchedulerName))
@@ -228,7 +236,7 @@ func TestGivenExistingLabelsWhenReconcilingOwnedFieldsThenExternalLabelsArePrese
 
 	// then
 	assert.Expect(actual.Labels["jobset.x-k8s.io/internal"]).To(gomega.Equal("keep"))
-	assert.Expect(actual.Labels).NotTo(gomega.HaveKey(topology.QueueLabel))
+	assert.Expect(actual.Labels[topology.QueueLabel]).To(gomega.Equal(aiv1alpha1.DefaultQueueName))
 }
 
 func TestGivenExistingJobSetWhenReconcilingOwnedFieldsThenDefaultedSpecIsPreserved(t *testing.T) {
@@ -289,6 +297,53 @@ func TestGivenJobSetWithoutConditionsWhenProjectingStatusThenConditionsRemainUns
 	// then
 	assert.Expect(jobSet.Status.Conditions).To(gomega.BeNil())
 	assert.Expect(status.Conditions).To(gomega.BeNil())
+}
+
+func TestGivenMissingLocalQueueWhenReconcilingThenAIJobReportsQueueNotFound(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
+	scheme := runtime.NewScheme()
+	assert.Expect(aiv1alpha1.AddToScheme(scheme)).To(gomega.Succeed())
+	assert.Expect(jobsetv1alpha2.AddToScheme(scheme)).To(gomega.Succeed())
+	assert.Expect(kueuev1beta1.AddToScheme(scheme)).To(gomega.Succeed())
+	job := testAIJob("any")
+	job.Spec.QueueName = "missing"
+	client := fake.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(job).WithObjects(job).Build()
+	reconciler := &AIJobReconciler{Client: client, Scheme: scheme}
+	key := types.NamespacedName{Name: job.Name, Namespace: job.Namespace}
+
+	// when
+	result, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+
+	// then
+	assert.Expect(err).NotTo(gomega.HaveOccurred())
+	assert.Expect(result.RequeueAfter).To(gomega.Equal(queueRetryDelay))
+	updated := &aiv1alpha1.AIJob{}
+	assert.Expect(client.Get(context.Background(), key, updated)).To(gomega.Succeed())
+	assert.Expect(updated.Status.Conditions).To(gomega.ContainElement(gomega.And(
+		gomega.HaveField("Type", aiv1alpha1.ConditionQueueReady),
+		gomega.HaveField("Status", metav1.ConditionFalse),
+		gomega.HaveField("Reason", "QueueNotFound"),
+	)))
+	queueCondition := apiMeta.FindStatusCondition(
+		updated.Status.Conditions, aiv1alpha1.ConditionQueueReady,
+	)
+	assert.Expect(queueCondition).NotTo(gomega.BeNil())
+	transitionTime := queueCondition.LastTransitionTime
+	_, err = reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+	assert.Expect(err).NotTo(gomega.HaveOccurred())
+	assert.Expect(client.Get(context.Background(), key, updated)).To(gomega.Succeed())
+	queueCondition = apiMeta.FindStatusCondition(
+		updated.Status.Conditions, aiv1alpha1.ConditionQueueReady,
+	)
+	assert.Expect(queueCondition).NotTo(gomega.BeNil())
+	assert.Expect(queueCondition.LastTransitionTime).To(gomega.Equal(transitionTime))
+	jobSet := &jobsetv1alpha2.JobSet{}
+	assert.Expect(client.Get(context.Background(), key, jobSet)).To(
+		gomega.Satisfy(apierrors.IsNotFound),
+	)
 }
 
 func testAIJob(preference string) *aiv1alpha1.AIJob {

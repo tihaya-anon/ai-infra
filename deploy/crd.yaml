@@ -20,6 +20,9 @@ spec:
     - jsonPath: .spec.workers
       name: Workers
       type: integer
+    - jsonPath: .spec.queueName
+      name: Queue
+      type: string
     - jsonPath: .status.conditions[?(@.type=="Completed")].status
       name: Completed
       type: string
@@ -131,6 +134,14 @@ spec:
                   suspend:
                     type: boolean
                 type: object
+              queueName:
+                default: training
+                maxLength: 253
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                type: string
+                x-kubernetes-validations:
+                - message: queueName is immutable
+                  rule: self == oldSelf
               topology:
                 properties:
                   preference:

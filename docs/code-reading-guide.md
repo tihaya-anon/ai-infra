@@ -18,14 +18,15 @@ AIJob YAML
 ### 1. 从用户提交的对象开始
 
 1. [`examples/aijob.yaml`](../examples/aijob.yaml)：最小的业务输入。先记住 `workers`、
-   `gpuPerWorker`、`topology`、有序 `args` 和队列 Label，后续查它们分别被谁消费。
+   `gpuPerWorker`、`queueName`、`topology` 和有序 `args`，后续查它们分别被谁消费。
 2. [`api/v1alpha1/aijob_types.go`](../api/v1alpha1/aijob_types.go)：`AIJob` API 的 code-first 源头。Go 字段给 Controller 使用，kubebuilder marker 生成 API Server 的字段校验、默认值、不可变规则、status 子资源和打印列。
 3. [`deploy/crd.yaml`](../deploy/crd.yaml)：`make generate` 产出的 CRD，是 API Server 实际看到的 `AIJob` 契约。对照 Go 类型阅读，可以确认生成后的服务端 schema 是否符合预期。
 4. [`api/v1alpha1/groupversion_info.go`](../api/v1alpha1/groupversion_info.go)：把 `AIJob`、`AIJobList` 注册到 `infra.example.io/v1alpha1` Scheme。
 
 ### 2. 看 Controller 如何启动
 
-1. [`cmd/controller/main.go`](../cmd/controller/main.go)：进程入口。重点看内置类型、AIJob 和 JobSet 如何加入同一个 Scheme，以及 Manager 如何创建并启动 Reconciler。
+1. [`cmd/controller/main.go`](../cmd/controller/main.go)：进程入口。重点看内置类型、AIJob、
+   JobSet 和 Kueue 如何加入同一个 Scheme，以及 Manager 如何创建并启动 Reconciler。
 2. [`internal/controller/aijob_controller.go`](../internal/controller/aijob_controller.go) 中的 `SetupWithManager`：声明 Controller 监听 `AIJob`，同时把其拥有的 `JobSet` 变更映射回父对象。
 
 读到这里，应能回答“一个 AIJob 变化为什么会进入 `Reconcile`”以及“JobSet 状态变化为什么也会触发它”。
@@ -34,7 +35,7 @@ AIJob YAML
 
 继续阅读 [`internal/controller/aijob_controller.go`](../internal/controller/aijob_controller.go)，建议按函数调用顺序展开：
 
-1. `Reconcile`：按 namespace/name 读取最新 AIJob，依次协调下游 JobSet 和上游 status。
+1. `Reconcile`：读取最新 AIJob，验证所选 LocalQueue，再依次协调下游 JobSet 和上游 status。
 2. `reconcileJobSet`、`desiredJobSet`：构造目标 JobSet，并用 OwnerReference 建立生命周期关系。
 3. `workerJobSpec`、`workerContainer`、`schedulingAnnotations`：把 worker 数量、镜像、GPU 请求和拓扑意图翻译到 Indexed Job 与 PodTemplate。
 4. `reconcileOwnedFields`：只维护本 Controller 拥有的字段，避免覆盖 JobSet webhook 或 Kueue 写入的内容。
@@ -58,7 +59,9 @@ AIJob YAML
    状态机、indexed identity 和 NDJSON lifecycle 记录。
 2. [`Dockerfile`](../Dockerfile)：把 Controller、Scheduler 和 Worker 构建为三个二进制，并放入同一个运行时镜像。
 3. [`deploy/controller.yaml`](../deploy/controller.yaml) 与 [`deploy/rbac.yaml`](../deploy/rbac.yaml)：Controller 的启动命令、ServiceAccount，以及读写 AIJob/JobSet 所需的最小权限；RBAC 也包含自定义 Scheduler 的权限绑定。
-4. [`deploy/kueue-resources.yaml`](../deploy/kueue-resources.yaml)：实验使用的 Topology、ResourceFlavor、ClusterQueue 和 LocalQueue，它们承接 Controller 传下来的队列与跨节点拓扑意图。
+4. [`internal/manifests/kueue.go`](../internal/manifests/kueue.go) 与
+   [`deploy/kueue-resources.yaml`](../deploy/kueue-resources.yaml)：前者定义可选队列、配额和
+   cohort，后者是生成的部署清单；它们承接 Controller 传下来的队列与跨节点拓扑意图。
 5. [`kind.yaml`](../kind.yaml) 与 [`scripts/label-nodes.sh`](../scripts/label-nodes.sh)：创建实验节点，并用 Label 和扩展资源模拟 rack、GPU fabric 与 GPU 容量。
 6. [`Makefile`](../Makefile)：把构建、建集群、部署依赖、提交样例和清理串成完整实验流程。最后读它，可以将前面的源码和清单映射到实际执行顺序。
 
@@ -86,7 +89,7 @@ AIJob YAML
 | Controller 会覆盖哪些字段 | `reconcileOwnedFields` 及其测试 |
 | `nvlink`、`pcie`、`same-rack` 分别由谁处理 | `schedulingAnnotations`、`internal/topology/constants.go` |
 | 自定义调度器怎样找到并启用插件 | `cmd/scheduler/main.go`、`deploy/scheduler-config.yaml` |
-| 队列、配额和 rack 拓扑在哪里配置 | `deploy/kueue-resources.yaml` |
+| 队列、配额和 rack 拓扑在哪里配置 | `internal/manifests/kueue.go` |
 | 本地实验如何模拟 GPU 节点 | `kind.yaml`、`scripts/label-nodes.sh` |
 | 为什么 baseline 和 optimized 可比较 | `deploy/scheduler-profiles/`、`benchmark_test.go` |
 | 失败后证据写到哪里、是否完整 | `evidence.go`、bundle 的 `manifest.json` |
