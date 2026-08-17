@@ -3,12 +3,13 @@ package gputopology
 import (
 	"testing"
 
+	"github.com/onsi/gomega"
 	"github.com/tihaya-anon/ai-infra-lab/internal/topology"
 	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
-func TestTopologyScore(t *testing.T) {
+func TestGivenTopologyPreferencesWhenScoringNodesThenExpectedScoresAreReturned(t *testing.T) {
 	tests := []struct {
 		name       string
 		preference string
@@ -43,14 +44,22 @@ func TestTopologyScore(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := topologyPreferenceScore(test.preference, test.labels); got != test.want {
-				t.Fatalf("got score %d, want %d", got, test.want)
-			}
+			assert := gomega.NewWithT(t)
+
+			// given
+			preference := test.preference
+			labels := test.labels
+
+			// when
+			score := topologyPreferenceScore(preference, labels)
+
+			// then
+			assert.Expect(score).To(gomega.Equal(test.want))
 		})
 	}
 }
 
-func TestTopologyRequirementStatus(t *testing.T) {
+func TestGivenTopologyRequirementsWhenFilteringNodesThenExpectedStatusIsReturned(t *testing.T) {
 	tests := []struct {
 		name     string
 		required string
@@ -97,12 +106,21 @@ func TestTopologyRequirementStatus(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			status := topologyRequirementStatus(test.required, test.labels)
-			if test.wantCode == fwk.Success && status != nil {
-				t.Fatalf("got status %v, want success", status)
-			}
-			if test.wantCode != fwk.Success && (status == nil || status.Code() != test.wantCode) {
-				t.Fatalf("got status %v, want code %v", status, test.wantCode)
+			assert := gomega.NewWithT(t)
+
+			// given
+			required := test.required
+			labels := test.labels
+
+			// when
+			status := topologyRequirementStatus(required, labels)
+
+			// then
+			if test.wantCode == fwk.Success {
+				assert.Expect(status).To(gomega.BeNil())
+			} else {
+				assert.Expect(status).NotTo(gomega.BeNil())
+				assert.Expect(status.Code()).To(gomega.Equal(test.wantCode))
 			}
 		})
 	}

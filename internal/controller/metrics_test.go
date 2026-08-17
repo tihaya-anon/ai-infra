@@ -4,12 +4,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
-func TestControllerMetricClassificationAndRegistration(t *testing.T) {
+func TestGivenControllerActivityWhenGatheringMetricsThenMetricsAreBounded(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	registry := prometheus.NewRegistry()
 	metrics := NewMetrics(registry)
+
+	// when
 	metrics.observe(time.Now(), reconcileSuccess)
 	metrics.recordError(errorOperationJobSet)
 	metrics.recordJobSetChange(jobSetOperationCreate)
@@ -17,40 +24,41 @@ func TestControllerMetricClassificationAndRegistration(t *testing.T) {
 	metrics.recordStatusChange(true)
 
 	families, err := registry.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]bool{
-		"aijob_controller_reconciliations_total":      false,
-		"aijob_controller_errors_total":               false,
-		"aijob_controller_jobset_changes_total":       false,
-		"aijob_controller_status_changes_total":       false,
-		"aijob_controller_reconcile_duration_seconds": false,
-	}
+	assert.Expect(err).NotTo(gomega.HaveOccurred())
+	metricNames := make([]string, 0, len(families))
+	labelValues := []string{}
 	for _, family := range families {
-		if _, exists := want[family.GetName()]; exists {
-			want[family.GetName()] = true
-		}
+		metricNames = append(metricNames, family.GetName())
 		for _, metric := range family.Metric {
 			for _, label := range metric.Label {
-				if label.GetValue() == "ignored" {
-					t.Fatal("unbounded or unsupported label was recorded")
-				}
+				labelValues = append(labelValues, label.GetValue())
 			}
 		}
 	}
-	for name, found := range want {
-		if !found {
-			t.Errorf("metric %s was not registered", name)
-		}
-	}
+
+	// then
+	assert.Expect(metricNames).To(gomega.ContainElements(
+		"aijob_controller_reconciliations_total",
+		"aijob_controller_errors_total",
+		"aijob_controller_jobset_changes_total",
+		"aijob_controller_status_changes_total",
+		"aijob_controller_reconcile_duration_seconds",
+	))
+	assert.Expect(labelValues).NotTo(gomega.ContainElement("ignored"))
 }
 
-func TestOperationLabelIsBounded(t *testing.T) {
-	if got := operationLabel("created"); got != jobSetOperationCreate {
-		t.Fatalf("got %q", got)
-	}
-	if got := operationLabel("unexpected"); got != jobSetOperationUnchanged {
-		t.Fatalf("got %q", got)
-	}
+func TestGivenOperationValuesWhenNormalizingLabelsThenValuesAreBounded(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
+	knownOperation := controllerutil.OperationResultCreated
+	unknownOperation := controllerutil.OperationResult("unexpected")
+
+	// when
+	knownLabel := operationLabel(knownOperation)
+	unknownLabel := operationLabel(unknownOperation)
+
+	// then
+	assert.Expect(knownLabel).To(gomega.Equal(jobSetOperationCreate))
+	assert.Expect(unknownLabel).To(gomega.Equal(jobSetOperationUnchanged))
 }

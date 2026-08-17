@@ -4,8 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+
+	"github.com/onsi/gomega"
 )
 
 type fakeEvidenceSource struct {
@@ -28,52 +29,55 @@ func (f fakeEvidenceSource) MetricsSnapshot(context.Context, string, int) ([]byt
 	return []byte("metric_total 1\n"), nil
 }
 
-func TestEvidenceCollectionComplete(t *testing.T) {
+func TestGivenCompleteObservationsWhenCollectingEvidenceThenManifestIsComplete(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	collector, err := NewEvidenceCollector(fakeEvidenceSource{}, EvidenceOptions{
 		RunID: "run-success", Experiment: "worker-failure", OutputDir: t.TempDir(),
 		Expected: []string{"AIJob Failed"}, Observed: []string{"AIJob Failed"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.Expect(err).NotTo(gomega.HaveOccurred())
+
+	// when
 	root, err := collector.Collect(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.Expect(err).NotTo(gomega.HaveOccurred())
 	data, err := os.ReadFile(filepath.Join(root, "manifest.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), `"complete": true`) {
-		t.Fatalf("unexpected manifest: %s", data)
-	}
+
+	// then
+	assert.Expect(err).NotTo(gomega.HaveOccurred())
+	assert.Expect(string(data)).To(gomega.ContainSubstring(`"complete": true`))
 }
 
-func TestTimedOutEvidenceIsWrittenAndReturnsError(t *testing.T) {
+func TestGivenDiscoveryTimeoutWhenCollectingEvidenceThenManifestIsIncomplete(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	collector, err := NewEvidenceCollector(fakeEvidenceSource{
 		discoveryError: context.DeadlineExceeded,
 	}, EvidenceOptions{
 		RunID: "run-timeout", Experiment: "capacity", OutputDir: t.TempDir(),
 		Expected: []string{"Pod Unschedulable"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.Expect(err).NotTo(gomega.HaveOccurred())
+
+	// when
 	root, err := collector.Collect(context.Background())
-	if err == nil {
-		t.Fatal("incomplete evidence must return non-zero")
-	}
 	data, readErr := os.ReadFile(filepath.Join(root, "manifest.json"))
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	if !strings.Contains(string(data), `"complete": false`) ||
-		!strings.Contains(string(data), "context deadline exceeded") {
-		t.Fatalf("timeout was not preserved in manifest: %s", data)
-	}
+
+	// then
+	assert.Expect(err).To(gomega.HaveOccurred())
+	assert.Expect(readErr).NotTo(gomega.HaveOccurred())
+	assert.Expect(string(data)).To(gomega.And(
+		gomega.ContainSubstring(`"complete": false`),
+		gomega.ContainSubstring("context deadline exceeded"),
+	))
 }
 
-func TestMetricsErrorsAreWarnings(t *testing.T) {
+func TestGivenMetricsErrorWhenCollectingEvidenceThenWarningIsRecorded(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	collector, err := NewEvidenceCollector(fakeEvidenceSource{
 		metricsError: context.DeadlineExceeded,
 	}, EvidenceOptions{
@@ -81,26 +85,30 @@ func TestMetricsErrorsAreWarnings(t *testing.T) {
 		Expected: []string{"Capacity block diagnosed"},
 		Observed: []string{"Capacity block diagnosed"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.Expect(err).NotTo(gomega.HaveOccurred())
+
+	// when
 	root, err := collector.Collect(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
 	data, readErr := os.ReadFile(filepath.Join(root, "manifest.json"))
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	if !strings.Contains(string(data), `"complete": true`) ||
-		!strings.Contains(string(data), `"warnings"`) {
-		t.Fatalf("metrics warning should not make evidence incomplete: %s", data)
-	}
+
+	// then
+	assert.Expect(err).NotTo(gomega.HaveOccurred())
+	assert.Expect(readErr).NotTo(gomega.HaveOccurred())
+	assert.Expect(string(data)).To(gomega.And(
+		gomega.ContainSubstring(`"complete": true`),
+		gomega.ContainSubstring(`"warnings"`),
+	))
 }
 
-func TestEvidenceOptionsRequireRunScope(t *testing.T) {
-	_, err := NewEvidenceCollector(fakeEvidenceSource{}, EvidenceOptions{})
-	if err == nil || !strings.Contains(err.Error(), "run ID") {
-		t.Fatal("expected validation error")
-	}
+func TestGivenMissingRunScopeWhenCreatingEvidenceCollectorThenValidationFails(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
+	options := EvidenceOptions{}
+
+	// when
+	_, err := NewEvidenceCollector(fakeEvidenceSource{}, options)
+
+	// then
+	assert.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("run ID")))
 }

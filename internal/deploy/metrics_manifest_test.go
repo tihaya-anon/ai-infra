@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/onsi/gomega"
 	"gopkg.in/yaml.v3"
 )
 
@@ -28,26 +29,28 @@ type manifest struct {
 	} `yaml:"spec"`
 }
 
-func TestMetricServicesAndSchedulerBinding(t *testing.T) {
+func TestGivenManifestsWhenReadingMetricsThenServicesAndBindingAreExposed(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	controller := readManifests(t, "../../deploy/controller.yaml")
 	scheduler := readManifests(t, "../../deploy/scheduler-config.yaml")
 
+	// when
 	assertServicePort(t, controller, "aijob-controller-metrics", 8080)
 	assertServicePort(t, scheduler, "ai-scheduler-metrics", 10259)
-
 	deployment := findManifest(t, scheduler, "Deployment", "ai-scheduler")
 	args := deployment.Spec.Template.Spec.Containers[0].Args
-	if !contains(args, "--bind-address=0.0.0.0") {
-		t.Fatalf("Scheduler does not listen on its Pod interface: %#v", args)
-	}
+
+	// then
+	assert.Expect(args).To(gomega.ContainElement("--bind-address=0.0.0.0"))
 }
 
 func readManifests(t *testing.T, path string) []manifest {
 	t.Helper()
+	assert := gomega.NewWithT(t)
 	file, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.Expect(err).NotTo(gomega.HaveOccurred())
 	defer file.Close()
 
 	var manifests []manifest
@@ -58,7 +61,7 @@ func readManifests(t *testing.T, path string) []manifest {
 			if err == io.EOF {
 				break
 			}
-			t.Fatal(err)
+			assert.Expect(err).NotTo(gomega.HaveOccurred())
 		}
 		if item.Kind != "" {
 			manifests = append(manifests, item)
@@ -69,28 +72,23 @@ func readManifests(t *testing.T, path string) []manifest {
 
 func assertServicePort(t *testing.T, manifests []manifest, name string, port int) {
 	t.Helper()
+	assert := gomega.NewWithT(t)
 	service := findManifest(t, manifests, "Service", name)
-	if len(service.Spec.Ports) != 1 || service.Spec.Ports[0].Port != port {
-		t.Fatalf("Service %s does not expose port %d: %#v", name, port, service.Spec.Ports)
-	}
+	assert.Expect(service.Spec.Ports).To(gomega.HaveLen(1))
+	assert.Expect(service.Spec.Ports[0].Port).To(gomega.Equal(port))
 }
 
 func findManifest(t *testing.T, manifests []manifest, kind, name string) manifest {
 	t.Helper()
+	assert := gomega.NewWithT(t)
 	for _, item := range manifests {
 		if item.Kind == kind && item.Metadata.Name == name {
 			return item
 		}
 	}
-	t.Fatalf("missing %s %s", kind, name)
+	assert.Expect(manifests).To(gomega.ContainElement(gomega.And(
+		gomega.HaveField("Kind", kind),
+		gomega.HaveField("Metadata.Name", name),
+	)))
 	return manifest{}
-}
-
-func contains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }

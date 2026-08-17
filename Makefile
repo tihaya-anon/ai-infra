@@ -54,7 +54,9 @@ test:
 test-api:
 	KUBEBUILDER_ASSETS="$$(./scripts/setup-envtest.sh $(ENVTEST_K8S_VERSION))" \
 	JOBSET_CRD_PATH="$$(go list -m -f '{{.Dir}}' sigs.k8s.io/jobset)/config/components/crd/bases/jobset.x-k8s.io_jobsets.yaml" \
-	go test -tags=api_test ./internal/controller -run '^TestAPIReconciliation$$' -count=1
+	go test -tags=api_test ./internal/controller \
+		-run '^TestGivenAPIEnvironmentWhenReconcilingAIJobThenResourcesAndStatusAreProjected$$' \
+		-count=1
 
 test-e2e:
 	go run ./cmd/labctl e2e --cluster $(CLUSTER)

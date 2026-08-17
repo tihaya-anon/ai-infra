@@ -4,54 +4,62 @@ import (
 	"testing"
 	"time"
 
+	"github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-func TestSchedulerMetricNormalizationAndErrorAccounting(t *testing.T) {
+func TestGivenSchedulerActivityWhenGatheringMetricsThenLabelsAreBounded(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	registry := prometheus.NewRegistry()
 	metrics := NewMetrics(registry)
+
+	// when
 	metrics.observeScore(time.Now(), scoreSuccess, "custom-user-value", "custom-node-value")
 	metrics.observeScore(time.Now(), scoreError, "nvlink", "")
 	metrics.recordError(errorReasonNodeMissing)
 
 	families, err := registry.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]bool{
-		"aijob_scheduler_score_evaluations_total":     false,
-		"aijob_scheduler_topology_observations_total": false,
-		"aijob_scheduler_errors_total":                false,
-		"aijob_scheduler_score_duration_seconds":      false,
-	}
+	assert.Expect(err).NotTo(gomega.HaveOccurred())
+	metricNames := make([]string, 0, len(families))
+	labelValues := []string{}
 	for _, family := range families {
-		if _, exists := want[family.GetName()]; exists {
-			want[family.GetName()] = true
-		}
+		metricNames = append(metricNames, family.GetName())
 		for _, metric := range family.Metric {
 			for _, label := range metric.Label {
-				if label.GetValue() == "custom-user-value" ||
-					label.GetValue() == "custom-node-value" {
-					t.Fatal("raw unbounded label reached the metric")
-				}
+				labelValues = append(labelValues, label.GetValue())
 			}
 		}
 	}
-	for name, found := range want {
-		if !found {
-			t.Errorf("metric %s was not registered", name)
-		}
-	}
+
+	// then
+	assert.Expect(metricNames).To(gomega.ContainElements(
+		"aijob_scheduler_score_evaluations_total",
+		"aijob_scheduler_topology_observations_total",
+		"aijob_scheduler_errors_total",
+		"aijob_scheduler_score_duration_seconds",
+	))
+	assert.Expect(labelValues).NotTo(gomega.ContainElement(gomega.Or(
+		gomega.Equal("custom-user-value"),
+		gomega.Equal("custom-node-value"),
+	)))
 }
 
-func TestBoundedLabelNormalization(t *testing.T) {
-	if got := normalizePreference("user-input"); got != "other" {
-		t.Fatalf("got preference %q", got)
-	}
-	if got := normalizeFabric("node-unique"); got != "other" {
-		t.Fatalf("got fabric %q", got)
-	}
-	if got := normalizeFabric(""); got != "missing" {
-		t.Fatalf("got empty fabric %q", got)
-	}
+func TestGivenUnboundedTopologyValuesWhenNormalizingThenLabelsUseBoundedCategories(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
+	preference := "user-input"
+	fabric := "node-unique"
+
+	// when
+	normalizedPreference := normalizePreference(preference)
+	normalizedFabric := normalizeFabric(fabric)
+	missingFabric := normalizeFabric("")
+
+	// then
+	assert.Expect(normalizedPreference).To(gomega.Equal("other"))
+	assert.Expect(normalizedFabric).To(gomega.Equal("other"))
+	assert.Expect(missingFabric).To(gomega.Equal("missing"))
 }

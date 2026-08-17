@@ -1,12 +1,22 @@
 package lab
 
-import "testing"
+import (
+	"testing"
 
-func TestContextGuard(t *testing.T) {
-	if err := validateContext("kind-ai-infra-lab", "kind-ai-infra-lab"); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateContext("production", "kind-ai-infra-lab"); err == nil {
-		t.Fatal("context guard accepted an unrelated cluster")
-	}
+	"github.com/onsi/gomega"
+)
+
+func TestGivenKubernetesContextsWhenValidatingThenOnlyExpectedKindContextIsAccepted(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
+	expectedContext := "kind-ai-infra-lab"
+
+	// when
+	matchingError := validateContext(expectedContext, expectedContext)
+	unrelatedError := validateContext("production", expectedContext)
+
+	// then
+	assert.Expect(matchingError).NotTo(gomega.HaveOccurred())
+	assert.Expect(unrelatedError).To(gomega.HaveOccurred())
 }

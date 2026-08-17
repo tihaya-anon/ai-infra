@@ -1,12 +1,16 @@
 package lab
 
 import (
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/onsi/gomega"
 )
 
-func TestValidateResultContract(t *testing.T) {
+func TestGivenBenchmarkResultsWhenValidatingThenContractViolationsAreReported(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	valid := BenchmarkResult{
 		SchemaVersion: ResultSchemaVersion, RunID: "run", Timestamp: time.Now(),
 		Profile: "baseline", Missing: []string{"probe observation timed out"},
@@ -14,14 +18,17 @@ func TestValidateResultContract(t *testing.T) {
 		Workloads:    []WorkloadDefinition{{Name: "holder"}},
 		Measurements: Measurements{Fragmentation: Fragmentation{TargetGPUs: 4}},
 	}
-	if err := ValidateResult(valid); err != nil {
-		t.Fatal(err)
-	}
+
+	// when
+	validError := ValidateResult(valid)
 	valid.SchemaVersion = "v2"
 	valid.Missing = nil
-	err := ValidateResult(valid)
-	if err == nil || !strings.Contains(err.Error(), "schemaVersion") ||
-		!strings.Contains(err.Error(), "missing observations") {
-		t.Fatalf("unexpected validation error: %v", err)
-	}
+	invalidError := ValidateResult(valid)
+
+	// then
+	assert.Expect(validError).NotTo(gomega.HaveOccurred())
+	assert.Expect(invalidError).To(gomega.MatchError(gomega.And(
+		gomega.ContainSubstring("schemaVersion"),
+		gomega.ContainSubstring("missing observations"),
+	)))
 }

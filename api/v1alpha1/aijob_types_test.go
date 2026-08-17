@@ -2,46 +2,49 @@ package v1alpha1
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
+
+	"github.com/onsi/gomega"
 )
 
-func TestAIJobArgsJSONRoundTrip(t *testing.T) {
+func TestGivenAIJobArgsWhenRoundTrippingJSONThenOrderIsPreserved(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	original := &AIJob{Spec: AIJobSpec{
 		Workers: 1, GPUPerWorker: 1,
 		Args: []string{"--mode=complete", "--duration=2s"},
 	}}
 
+	// when
 	data, err := json.Marshal(original)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), `"args":["--mode=complete","--duration=2s"]`) {
-		t.Fatalf("ordered args missing from JSON: %s", data)
-	}
-
+	assert.Expect(err).NotTo(gomega.HaveOccurred())
 	decoded := &AIJob{}
-	if err := json.Unmarshal(data, decoded); err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Join(decoded.Spec.Args, ","); got != "--mode=complete,--duration=2s" {
-		t.Fatalf("got args %q", got)
-	}
+	err = json.Unmarshal(data, decoded)
+
+	// then
+	assert.Expect(err).NotTo(gomega.HaveOccurred())
+	assert.Expect(string(data)).To(gomega.ContainSubstring(
+		`"args":["--mode=complete","--duration=2s"]`,
+	))
+	assert.Expect(decoded.Spec.Args).To(gomega.Equal(original.Spec.Args))
 }
 
-func TestAIJobArgsAreOptionalAndDeepCopied(t *testing.T) {
-	withoutArgs, err := json.Marshal(&AIJob{Spec: AIJobSpec{Workers: 1, GPUPerWorker: 1}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(withoutArgs), `"args"`) {
-		t.Fatalf("omitted args must not be serialized: %s", withoutArgs)
-	}
+func TestGivenOptionalAIJobArgsWhenSerializingAndCopyingThenTheyRemainIndependent(t *testing.T) {
+	assert := gomega.NewWithT(t)
 
+	// given
+	withoutArgs := &AIJob{Spec: AIJobSpec{Workers: 1, GPUPerWorker: 1}}
 	original := &AIJob{Spec: AIJobSpec{Args: []string{"first", "second"}}}
+
+	// when
+	data, err := json.Marshal(withoutArgs)
 	copy := original.DeepCopy()
 	copy.Spec.Args[0] = "changed"
-	if original.Spec.Args[0] != "first" {
-		t.Fatal("DeepCopy shared the args backing array")
-	}
+
+	// then
+	assert.Expect(err).NotTo(gomega.HaveOccurred())
+	assert.Expect(string(data)).NotTo(gomega.ContainSubstring(`"args"`))
+	assert.Expect(original.Spec.Args).To(gomega.Equal([]string{"first", "second"}))
+	assert.Expect(copy.Spec.Args).To(gomega.Equal([]string{"changed", "second"}))
 }

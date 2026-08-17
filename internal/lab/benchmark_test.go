@@ -3,10 +3,10 @@ package lab
 import (
 	"context"
 	"os"
-	"reflect"
 	"testing"
 	"time"
 
+	"github.com/onsi/gomega"
 	aiv1alpha1 "github.com/tihaya-anon/ai-infra-lab/api/v1alpha1"
 	"github.com/tihaya-anon/ai-infra-lab/internal/topology"
 	appsv1 "k8s.io/api/apps/v1"
@@ -21,32 +21,34 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-func TestSchedulerProfilesDifferOnlyByScoringStrategy(t *testing.T) {
+func TestGivenSchedulerProfilesWhenNormalizingStrategyThenOnlyScoringStrategyDiffers(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	baseline := readProfile(t, "../../deploy/scheduler-profiles/baseline.yaml")
 	optimized := readProfile(t, "../../deploy/scheduler-profiles/optimized.yaml")
 
+	// when
 	baselineType := replaceStrategy(t, baseline, "PROFILE_STRATEGY")
 	optimizedType := replaceStrategy(t, optimized, "PROFILE_STRATEGY")
-	if baselineType != "LeastAllocated" || optimizedType != "MostAllocated" {
-		t.Fatalf("unexpected strategies: baseline=%s optimized=%s", baselineType, optimizedType)
-	}
-	if !reflect.DeepEqual(baseline, optimized) {
-		t.Fatal("Scheduler profiles differ outside the simulated-GPU scoring strategy")
-	}
+
+	// then
+	assert.Expect(baselineType).To(gomega.Equal("LeastAllocated"))
+	assert.Expect(optimizedType).To(gomega.Equal("MostAllocated"))
+	assert.Expect(baseline).To(gomega.Equal(optimized))
 }
 
-func TestCleanupCannotSelectAnotherRun(t *testing.T) {
+func TestGivenResourcesFromMultipleRunsWhenCleaningUpThenOnlySelectedRunIsRemoved(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	scheme := runtime.NewScheme()
-	if err := aiv1alpha1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
+	assert.Expect(aiv1alpha1.AddToScheme(scheme)).To(gomega.Succeed())
 	for _, add := range []func(*runtime.Scheme) error{
 		corev1.AddToScheme, appsv1.AddToScheme, batchv1.AddToScheme,
 		jobsetv1alpha2.AddToScheme,
 	} {
-		if err := add(scheme); err != nil {
-			t.Fatal(err)
-		}
+		assert.Expect(add(scheme)).To(gomega.Succeed())
 	}
 	addKueueToScheme(scheme)
 	wanted := testRunAIJob("wanted", "run-a")
@@ -57,30 +59,39 @@ func TestCleanupCannotSelectAnotherRun(t *testing.T) {
 		cluster: &Cluster{Client: apiClient},
 		options: BenchmarkOptions{Namespace: "default", Timeout: time.Second},
 	}
-	if err := runner.cleanup(context.Background(), "run-a"); err != nil {
-		t.Fatal(err)
-	}
+
+	// when
+	err := runner.cleanup(context.Background(), "run-a")
 	remaining := &aiv1alpha1.AIJobList{}
-	err := apiClient.List(context.Background(), remaining, client.InNamespace("default"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(remaining.Items) != 1 || remaining.Items[0].Name != "unrelated" {
-		t.Fatalf("cleanup selected unrelated resources: %#v", remaining.Items)
-	}
+	listError := apiClient.List(context.Background(), remaining, client.InNamespace("default"))
+
+	// then
+	assert.Expect(err).NotTo(gomega.HaveOccurred())
+	assert.Expect(listError).NotTo(gomega.HaveOccurred())
+	assert.Expect(remaining.Items).To(gomega.HaveLen(1))
+	assert.Expect(remaining.Items[0].Name).To(gomega.Equal("unrelated"))
 }
 
-func TestWriteVersionedResult(t *testing.T) {
+func TestGivenVersionedResultWhenWritingThenFileIsCreated(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	result := BenchmarkResult{
 		SchemaVersion: ResultSchemaVersion, RunID: "run-1", Timestamp: time.Now(),
 		Profile: "baseline", Outcomes: map[string]string{},
 	}
-	if err := writeResult(t.TempDir(), "baseline", 1, result); err != nil {
-		t.Fatal(err)
-	}
+
+	// when
+	err := writeResult(t.TempDir(), "baseline", 1, result)
+
+	// then
+	assert.Expect(err).NotTo(gomega.HaveOccurred())
 }
 
-func TestLifecycleDurationsUseWorkloadAndPodCreation(t *testing.T) {
+func TestGivenLifecycleTransitionsWhenCalculatingThenDurationsUseCreationTimes(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	base := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)
 	snapshot := Snapshot{
 		AIJobs: []aiv1alpha1.AIJob{{ObjectMeta: metav1.ObjectMeta{
@@ -107,16 +118,21 @@ func TestLifecycleDurationsUseWorkloadAndPodCreation(t *testing.T) {
 			}}},
 		}},
 	}
+
+	// when
 	got := lifecycleFromSnapshot([]WorkloadDefinition{{Name: "job"}}, snapshot)[0]
-	if got.AdmissionWaitSeconds == nil || *got.AdmissionWaitSeconds != 2 {
-		t.Fatalf("got admission wait %#v, want 2 seconds", got.AdmissionWaitSeconds)
-	}
-	if got.SchedulingLatencySeconds == nil || *got.SchedulingLatencySeconds != 3 {
-		t.Fatalf("got scheduling latency %#v, want 3 seconds", got.SchedulingLatencySeconds)
-	}
+
+	// then
+	assert.Expect(got.AdmissionWaitSeconds).NotTo(gomega.BeNil())
+	assert.Expect(*got.AdmissionWaitSeconds).To(gomega.Equal(float64(2)))
+	assert.Expect(got.SchedulingLatencySeconds).NotTo(gomega.BeNil())
+	assert.Expect(*got.SchedulingLatencySeconds).To(gomega.Equal(float64(3)))
 }
 
-func TestRelatedWorkloadsCanUseJobSetOwnerReference(t *testing.T) {
+func TestGivenJobSetOwnerWhenSelectingWorkloadsThenRelatedWorkloadIsReturned(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	workloads := []Workload{
 		{
 			ObjectMeta: metav1.ObjectMeta{
@@ -133,58 +149,66 @@ func TestRelatedWorkloadsCanUseJobSetOwnerReference(t *testing.T) {
 		},
 	}
 	jobSets := []jobsetv1alpha2.JobSet{{ObjectMeta: metav1.ObjectMeta{Name: "job-a"}}}
+
+	// when
 	got := relatedWorkloads(workloads, nil, jobSets)
-	if len(got) != 1 || got[0].Name != "wanted" {
-		t.Fatalf("unexpected related workloads: %#v", got)
-	}
+
+	// then
+	assert.Expect(got).To(gomega.HaveLen(1))
+	assert.Expect(got[0].Name).To(gomega.Equal("wanted"))
 }
 
-func TestExerciseWorkloadNamesFitJobSetGeneratedPodNames(t *testing.T) {
+func TestGivenExerciseKindsWhenGeneratingWorkloadNamesThenJobSetPodNamesFitLimits(t *testing.T) {
+	// given
 	kinds := []string{ExerciseCapacity, ExerciseWorkerFailure, ExerciseControllerRestart}
 	for _, kind := range kinds {
 		t.Run(kind, func(t *testing.T) {
+			assert := gomega.NewWithT(t)
+
+			// when
 			name := exerciseWorkloadName(kind, newRunID(exerciseRunPrefix(kind)))
 			replicatedJobName := name + "-workers-0"
-			if len(replicatedJobName) > 50 {
-				t.Fatalf("replicated job name %q is too long: %d", replicatedJobName, len(replicatedJobName))
-			}
+
+			// then
+			assert.Expect(len(replicatedJobName)).To(gomega.BeNumerically("<=", 50))
 		})
 	}
 }
 
-func TestExerciseWorkloadNamesStayReadable(t *testing.T) {
+func TestGivenCapacityRunIDWhenGeneratingWorkloadNameThenNameRemainsReadable(t *testing.T) {
+	assert := gomega.NewWithT(t)
+
+	// given
 	runID := "ex-cap-1786855813-5a8fc2fe"
-	if got := exerciseWorkloadName(ExerciseCapacity, runID); got != "cap-"+runID {
-		t.Fatalf("unexpected capacity workload name: %q", got)
-	}
+
+	// when
+	name := exerciseWorkloadName(ExerciseCapacity, runID)
+
+	// then
+	assert.Expect(name).To(gomega.Equal("cap-" + runID))
 }
 
 func readProfile(t *testing.T, path string) map[string]any {
 	t.Helper()
+	assert := gomega.NewWithT(t)
 	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.Expect(err).NotTo(gomega.HaveOccurred())
 	result := map[string]any{}
-	if err := yaml.Unmarshal(data, &result); err != nil {
-		t.Fatal(err)
-	}
+	assert.Expect(yaml.Unmarshal(data, &result)).To(gomega.Succeed())
 	configData := result["data"].(map[string]any)["config.yaml"].(string)
-	if _, _, err := schedulerscheme.Codecs.UniversalDecoder().Decode(
+	_, _, err = schedulerscheme.Codecs.UniversalDecoder().Decode(
 		[]byte(configData), nil, nil,
-	); err != nil {
-		t.Fatalf("strict Scheduler config decode failed: %v", err)
-	}
+	)
+	assert.Expect(err).NotTo(gomega.HaveOccurred(), "strict Scheduler config decode failed")
 	return result
 }
 
 func replaceStrategy(t *testing.T, profile map[string]any, replacement string) string {
 	t.Helper()
+	assert := gomega.NewWithT(t)
 	data := profile["data"].(map[string]any)
 	config := map[string]any{}
-	if err := yaml.Unmarshal([]byte(data["config.yaml"].(string)), &config); err != nil {
-		t.Fatal(err)
-	}
+	assert.Expect(yaml.Unmarshal([]byte(data["config.yaml"].(string)), &config)).To(gomega.Succeed())
 	profiles := config["profiles"].([]any)
 	pluginConfig := profiles[0].(map[string]any)["pluginConfig"].([]any)
 	args := pluginConfig[0].(map[string]any)["args"].(map[string]any)
@@ -192,9 +216,7 @@ func replaceStrategy(t *testing.T, profile map[string]any, replacement string) s
 	original := strategy["type"].(string)
 	strategy["type"] = replacement
 	normalized, err := yaml.Marshal(config)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.Expect(err).NotTo(gomega.HaveOccurred())
 	data["config.yaml"] = string(normalized)
 	return original
 }
