@@ -20,12 +20,12 @@ contain AIJob names, Pod names, namespaces, or other unbounded resource identifi
 
 ### Requirement: Scheduler policy metrics
 The custom Scheduler plugin SHALL expose bounded counters and duration measurements for score
-evaluations, requested topology categories, observed fabric categories, and plugin errors. Metrics
+evaluations, requested topology categories, observed topology-class categories, and plugin errors. Metrics
 MUST NOT identify individual Pods, AIJobs, or Nodes.
 
 #### Scenario: Topology preference is scored
 - **WHEN** the plugin scores eligible Nodes for a supported topology preference
-- **THEN** the metrics endpoint records the preference and bounded observed-fabric categories
+- **THEN** the metrics endpoint records the preference and bounded observed topology-class categories
 
 #### Scenario: Plugin input is invalid
 - **WHEN** the plugin cannot score because required framework state is unavailable

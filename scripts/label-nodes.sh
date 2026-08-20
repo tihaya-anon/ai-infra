@@ -7,9 +7,18 @@ if (( ${#nodes[@]} < 3 )); then
   exit 1
 fi
 
-kubectl label --overwrite "${nodes[0]}" infra.example.io/gpu-node=true infra.example.io/gpu-fabric=nvlink infra.example.io/rack=rack-a
-kubectl label --overwrite "${nodes[1]}" infra.example.io/gpu-node=true infra.example.io/gpu-fabric=pcie infra.example.io/rack=rack-a
-kubectl label --overwrite "${nodes[2]}" infra.example.io/gpu-node=true infra.example.io/gpu-fabric=pcie infra.example.io/rack=rack-b
+kubectl label --overwrite "${nodes[0]}" \
+  infra.example.io/gpu-node=true \
+  infra.example.io/gpu-topology-class=nvlink-capable \
+  infra.example.io/rack=rack-a
+kubectl label --overwrite "${nodes[1]}" \
+  infra.example.io/gpu-node=true \
+  infra.example.io/gpu-topology-class=pcie-only \
+  infra.example.io/rack=rack-a
+kubectl label --overwrite "${nodes[2]}" \
+  infra.example.io/gpu-node=true \
+  infra.example.io/gpu-topology-class=pcie-only \
+  infra.example.io/rack=rack-b
 
 kubectl -n ai-infra-system rollout status \
   daemonset/simulated-gpu-device-plugin --timeout=120s
@@ -33,4 +42,5 @@ for attempt in {1..24}; do
   sleep 5
 done
 
-kubectl get nodes -L infra.example.io/gpu-node,infra.example.io/gpu-fabric,infra.example.io/rack
+kubectl get nodes \
+  -L infra.example.io/gpu-node,infra.example.io/gpu-topology-class,infra.example.io/rack

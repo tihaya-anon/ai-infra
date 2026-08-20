@@ -38,8 +38,8 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 		}, []string{"result"}),
 		topologies: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "aijob", Subsystem: "scheduler", Name: "topology_observations_total",
-			Help: "Number of bounded requested-topology and observed-fabric pairs.",
-		}, []string{"preference", "fabric"}),
+			Help: "Number of bounded requested-topology and observed node-topology-class pairs.",
+		}, []string{"preference", "topology_class"}),
 		errors: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "aijob", Subsystem: "scheduler", Name: "errors_total",
 			Help: "Number of plugin errors by bounded operation and reason.",
@@ -54,7 +54,12 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 	return metrics
 }
 
-func (m *Metrics) observeScore(started time.Time, result scoreResult, preference, fabric string) {
+func (m *Metrics) observeScore(
+	started time.Time,
+	result scoreResult,
+	preference,
+	topologyClass string,
+) {
 	if m == nil {
 		return
 	}
@@ -62,7 +67,7 @@ func (m *Metrics) observeScore(started time.Time, result scoreResult, preference
 	m.duration.WithLabelValues(string(result)).Observe(time.Since(started).Seconds())
 	if result == scoreSuccess {
 		m.topologies.WithLabelValues(
-			normalizePreference(preference), normalizeFabric(fabric),
+			normalizePreference(preference), normalizeTopologyClass(topologyClass),
 		).Inc()
 	}
 }
@@ -84,11 +89,11 @@ func normalizePreference(value string) string {
 	}
 }
 
-func normalizeFabric(value string) string {
+func normalizeTopologyClass(value string) string {
 	switch value {
 	case "":
 		return "missing"
-	case "nvlink", "pcie":
+	case "nvlink-capable", "pcie-only":
 		return value
 	default:
 		return "other"

@@ -266,16 +266,16 @@ func workerContainer(job *aiv1alpha1.AIJob) corev1.Container {
 func schedulingAnnotations(topologyConfig aiv1alpha1.Topology) map[string]string {
 	annotationMap := map[string]string{}
 
-	if topologyConfig.Preference == topology.FabricNVLink ||
-		topologyConfig.Preference == topology.FabricPCIe {
+	if topologyConfig.Preference == topology.TopologyNVLink ||
+		topologyConfig.Preference == topology.TopologyPCIe {
 		annotationMap[topology.PreferenceAnnotation] = topologyConfig.Preference
 	}
 
 	switch topologyConfig.Required {
 	case "same-rack":
 		annotationMap[topology.RequiredTopologyAnnotation] = topology.RackLabel
-	case topology.FabricNVLink, topology.FabricPCIe:
-		annotationMap[topology.RequiredFabricAnnotation] = topologyConfig.Required
+	case topology.TopologyNVLink, topology.TopologyPCIe:
+		annotationMap[topology.RequiredTopologyClassAnnotation] = topologyConfig.Required
 	}
 
 	if len(annotationMap) == 0 {

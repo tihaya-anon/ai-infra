@@ -766,7 +766,8 @@ nvidia-smi topo -p2p n  # 检查 GPU 间 NVLink P2P 能力
 - 网络没有拥塞或超售；
 - Worker 获得了同一个 NVLink 域中的 GPU。
 
-因此，`same-rack`、`nvlink` 和 `pcie` 不是同一层的三个互斥硬件型号。前者描述跨节点位置，后两者在本项目中描述节点内 GPU fabric 偏好。
+因此，`same-rack`、`nvlink` 和 `pcie` 不是同一层的三个互斥硬件型号。前者描述跨节点位置，
+后两者在本项目中只是用户表达的 GPU 通信路径偏好，随后被映射到粗粒度 Node 拓扑分类。
 
 ### 从近到远看一次通信
 
@@ -794,11 +795,13 @@ flowchart TD
 
 | `AIJob.spec.topology` | 当前代码如何处理 | 能保证什么 | 不能保证什么 |
 | --- | --- | --- | --- |
-| `nvlink` | 给 Pod 加偏好注解，Scheduler Plugin 给 `gpu-fabric=nvlink` 的 Node 更高分 | 在其他条件相同时更偏向标为 NVLink 的 Node | 不是硬约束；不选择具体 GPU；不证明 GPU 两两 NVLink 相连 |
-| `pcie` | 给 Pod 加偏好注解，对 NVLink Node 打 100 分、PCIe Node 打 80 分 | 允许使用高速 Node，同时偏好至少有 PCIe GPU 能力的 Node | 不保证 GPU 位于同一 PCIe Switch 或 NUMA 节点 |
+| `nvlink` | 给 Pod 加偏好注解，Scheduler Plugin 给 `gpu-topology-class=nvlink-capable` 的 Node 更高分 | 在其他条件相同时更偏向标为 NVLink-capable 的 Node | 不是硬约束；不选择具体 GPU；不证明 GPU 两两 NVLink 相连 |
+| `pcie` | 给 Pod 加偏好注解，对 `nvlink-capable` Node 打 100 分、`pcie-only` Node 打 80 分 | 允许使用高速 Node，同时接受普通 PCIe-only GPU Node | 不保证 GPU 位于同一 PCIe Switch 或 NUMA 节点 |
 | `same-rack` | 转换为 Kueue TAS 的 required topology 注解 | 整个 PodSet 准入到同一 rack 拓扑域 | 不保证节点内 GPU 路径，也不保证 RDMA 网络质量 |
 
-这里 `pcie` 的含义不是“拒绝 NVLink”。NVLink 机器仍然拥有 PCIe，并且通常是更好的节点，因此当前评分让 NVLink Node 得 100 分、普通 PCIe Node 得 80 分。如果业务需要“必须位于某类设备拓扑”，就不应只用 `ScorePlugin`，而应使用 Filter、node affinity，或更适合设备级约束的 DRA。
+这里 `pcie` 的含义不是“拒绝 NVLink-capable 节点”。这类机器仍然拥有 PCIe，并且通常是更好的节点，
+因此当前评分让 `nvlink-capable` Node 得 100 分、普通 `pcie-only` Node 得 80 分。如果业务需要“必须位于某类设备拓扑”，
+就不应只用 `ScorePlugin`，而应使用 Filter、node affinity，或更适合设备级约束的 DRA。
 
 ## 五、拓扑需求应定义在哪里
 
@@ -826,7 +829,8 @@ metadata:
 
 普通 Scheduler Plugin 只给 Node 打分，无法保证容器最终拿到哪几张 GPU。要表达“多张 GPU 共享 PCIe root”或“设备之间存在 NVLink”，设备驱动需要把这些属性发布为 DRA 设备属性，再由 `ResourceClaim` 的 selector/constraint 请求合适的设备组合。
 
-本实验没有真实 GPU，所以只能用 Node Label 模拟节点级 `nvlink` 和 `pcie` 偏好。这是教学替身，不是生产设备分配方案。
+本实验没有真实 GPU，所以只能用 `gpu-topology-class=nvlink-capable|pcie-only` 模拟节点级分类。
+这是教学替身，不是生产设备分配方案。
 
 ## 六、项目阅读顺序
 
@@ -1003,10 +1007,10 @@ var _ framework.ScorePlugin = &Plugin{}
 
 | AIJob 偏好 | Node 标签 | 分数 |
 | --- | --- | ---: |
-| `nvlink` | `gpu-fabric=nvlink` | 100 |
-| `nvlink` | `gpu-fabric=pcie` | 50 |
-| `pcie` | `gpu-fabric=nvlink` | 100 |
-| `pcie` | `gpu-fabric=pcie` | 80 |
+| `nvlink` | `gpu-topology-class=nvlink-capable` | 100 |
+| `nvlink` | `gpu-topology-class=pcie-only` | 50 |
+| `pcie` | `gpu-topology-class=nvlink-capable` | 100 |
+| `pcie` | `gpu-topology-class=pcie-only` | 80 |
 | 其他情况 | 无匹配 | 0 |
 
 默认 `NodeResourcesFit` 会检查 Pod 的扩展资源请求，因此插件不重复统计 GPU。它也不处理 Taint、Volume、CPU、内存和抢占。
@@ -1224,7 +1228,7 @@ make deploy CLUSTER=ai-infra-lab-v134 EXTERNAL_IMAGE_MIRROR=
 
 kind 没有真实 GPU Device Plugin。本项目部署的模拟 Device Plugin 与 `scripts/label-nodes.sh` 会：
 
-1. 给 Node 添加模拟的 fabric 和 rack 标签；
+1. 给 Node 添加模拟的 GPU 拓扑等级和 rack 标签；
 2. 在每个实验 Worker Node 的 kubelet socket 上注册四个 `example.com/gpu` 设备；
 3. 等待 Node 的 allocatable 扩展资源可见。
 

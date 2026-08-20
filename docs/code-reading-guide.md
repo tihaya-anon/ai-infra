@@ -70,7 +70,7 @@ AIJob YAML
    [`deploy/kueue-resources.yaml`](../deploy/kueue-resources.yaml)：前者定义可选队列、配额和
    cohort，后者是生成的部署清单；它们承接 Controller 传下来的队列与跨节点拓扑意图。
 6. [`kind.yaml`](../kind.yaml)、[`deploy/device-plugin.yaml`](../deploy/device-plugin.yaml) 与
-   [`scripts/label-nodes.sh`](../scripts/label-nodes.sh)：创建实验节点，用 Label 模拟 rack/GPU fabric，
+   [`scripts/label-nodes.sh`](../scripts/label-nodes.sh)：创建实验节点，用 Label 模拟 rack/GPU 拓扑等级，
    并由 Device Plugin 注册 GPU 容量。
 7. [`Makefile`](../Makefile)：`build` 覆盖五个本地命令入口，`image` 传入 builder、module proxy 和
    runtime 镜像参数；其余 target 把建集群、部署依赖、提交样例和清理串成完整实验流程。

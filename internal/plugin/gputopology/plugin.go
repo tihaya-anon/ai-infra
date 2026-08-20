@@ -19,7 +19,7 @@ const Name = "GPUTopology"
 var _ framework.ScorePlugin = &Plugin{}
 var _ framework.FilterPlugin = &Plugin{}
 
-// Plugin adds cluster-specific GPU fabric preferences to node scoring.
+// Plugin adds cluster-specific GPU topology-class preferences to node scoring.
 type Plugin struct {
 	metrics *Metrics
 }
@@ -53,12 +53,12 @@ func (p *Plugin) observeFilterAndScore(pod *corev1.Pod,
 		return fwk.NewStatus(fwk.Error, fmt.Sprintf("node not found in %s", nodeInfo.String()))
 	}
 	p.metrics.observeScore(
-		started, scoreSuccess, preference(pod), node.Labels[topology.FabricLabel],
+		started, scoreSuccess, preference(pod), nodeTopologyClass(node.Labels),
 	)
 	return nil
 }
 
-// Filter rejects nodes that do not satisfy a required GPU fabric.
+// Filter rejects nodes that do not satisfy a required node GPU topology class.
 func (p *Plugin) Filter(
 	_ context.Context,
 	_ fwk.CycleState,
@@ -69,7 +69,7 @@ func (p *Plugin) Filter(
 		return status
 	}
 	node := nodeInfo.Node()
-	return topologyRequirementStatus(requiredFabric(pod), node.Labels)
+	return topologyRequirementStatus(requiredTopologyClass(pod), node.Labels)
 }
 
 // Score ranks a feasible Node without replacing kube-scheduler's default checks.
@@ -93,30 +93,31 @@ func preference(pod *corev1.Pod) string {
 	return pod.Annotations[topology.PreferenceAnnotation]
 }
 
-func requiredFabric(pod *corev1.Pod) string {
-	return pod.Annotations[topology.RequiredFabricAnnotation]
+func requiredTopologyClass(pod *corev1.Pod) string {
+	return pod.Annotations[topology.RequiredTopologyClassAnnotation]
 }
 
 func topologyRequirementStatus(want string, labels map[string]string) *fwk.Status {
 	switch want {
 	case "", "any":
 		return nil
-	case topology.FabricNVLink:
-		if labels[topology.FabricLabel] == topology.FabricNVLink {
+	case topology.TopologyNVLink:
+		if nodeTopologyClass(labels) == topology.TopologyClassNVLinkCapable {
 			return nil
 		}
 		return fwk.NewStatus(
 			fwk.Unschedulable,
-			fmt.Sprintf("requires GPU fabric %s", topology.FabricNVLink),
+			fmt.Sprintf("requires GPU topology compatible with %s", topology.TopologyNVLink),
 		)
-	case topology.FabricPCIe:
-		if labels[topology.FabricLabel] == topology.FabricNVLink ||
-			labels[topology.FabricLabel] == topology.FabricPCIe {
+	case topology.TopologyPCIe:
+		class := nodeTopologyClass(labels)
+		if class == topology.TopologyClassNVLinkCapable ||
+			class == topology.TopologyClassPCIeOnly {
 			return nil
 		}
 		return fwk.NewStatus(
 			fwk.Unschedulable,
-			fmt.Sprintf("requires GPU fabric %s", topology.FabricPCIe),
+			fmt.Sprintf("requires GPU topology compatible with %s", topology.TopologyPCIe),
 		)
 	default:
 		return nil
@@ -124,21 +125,26 @@ func topologyRequirementStatus(want string, labels map[string]string) *fwk.Statu
 }
 
 func topologyPreferenceScore(want string, labels map[string]string) int64 {
+	class := nodeTopologyClass(labels)
 	switch want {
-	case topology.FabricNVLink:
-		if labels[topology.FabricLabel] == topology.FabricNVLink {
+	case topology.TopologyNVLink:
+		if class == topology.TopologyClassNVLinkCapable {
 			return framework.MaxNodeScore
 		}
-		if labels[topology.FabricLabel] == topology.FabricPCIe {
+		if class == topology.TopologyClassPCIeOnly {
 			return 50
 		}
-	case topology.FabricPCIe:
-		if labels[topology.FabricLabel] == topology.FabricNVLink {
+	case topology.TopologyPCIe:
+		if class == topology.TopologyClassNVLinkCapable {
 			return framework.MaxNodeScore
 		}
-		if labels[topology.FabricLabel] == topology.FabricPCIe {
+		if class == topology.TopologyClassPCIeOnly {
 			return 80
 		}
 	}
 	return 0
+}
+
+func nodeTopologyClass(labels map[string]string) string {
+	return labels[topology.GPUTopologyClassLabel]
 }

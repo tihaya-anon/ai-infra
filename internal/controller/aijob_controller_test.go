@@ -106,7 +106,7 @@ func TestGivenSameRackRequiredWhenBuildingJobSetThenKueueTopologyIsRequired(t *t
 	assert.Expect(annotations).NotTo(gomega.HaveKey(topology.PreferenceAnnotation))
 }
 
-func TestGivenRequiredFabricWhenBuildingJobSetThenFilterIntentIsCarried(t *testing.T) {
+func TestGivenRequiredTopologyClassWhenBuildingJobSetThenFilterIntentIsCarried(t *testing.T) {
 	assert := gomega.NewWithT(t)
 
 	// given
@@ -119,7 +119,7 @@ func TestGivenRequiredFabricWhenBuildingJobSetThenFilterIntentIsCarried(t *testi
 
 	// then
 	assert.Expect(annotations[topology.PreferenceAnnotation]).To(gomega.Equal("pcie"))
-	assert.Expect(annotations[topology.RequiredFabricAnnotation]).To(gomega.Equal("nvlink"))
+	assert.Expect(annotations[topology.RequiredTopologyClassAnnotation]).To(gomega.Equal("nvlink"))
 	assert.Expect(annotations).NotTo(gomega.HaveKey(topology.RequiredTopologyAnnotation))
 }
 

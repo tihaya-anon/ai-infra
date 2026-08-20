@@ -51,15 +51,15 @@ func TestGivenUnboundedTopologyValuesWhenNormalizingThenLabelsUseBoundedCategori
 
 	// given
 	preference := "user-input"
-	fabric := "node-unique"
+	topologyClass := "node-unique"
 
 	// when
 	normalizedPreference := normalizePreference(preference)
-	normalizedFabric := normalizeFabric(fabric)
-	missingFabric := normalizeFabric("")
+	normalizedTopologyClass := normalizeTopologyClass(topologyClass)
+	missingTopologyClass := normalizeTopologyClass("")
 
 	// then
 	assert.Expect(normalizedPreference).To(gomega.Equal("other"))
-	assert.Expect(normalizedFabric).To(gomega.Equal("other"))
-	assert.Expect(missingFabric).To(gomega.Equal("missing"))
+	assert.Expect(normalizedTopologyClass).To(gomega.Equal("other"))
+	assert.Expect(missingTopologyClass).To(gomega.Equal("missing"))
 }

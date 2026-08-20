@@ -128,7 +128,7 @@ Controller 是一个深模块：外部接口是少量 watched resources 和 `Rec
 
 Scheduler plugin 要保持 Kubernetes Framework 接口，复杂度放到内部模型：
 
-- `topology.Snapshot`: 一次调度周期看到的节点、GPU、rack、fabric。
+- `topology.Snapshot`: 一次调度周期看到的节点、GPU、rack、节点拓扑等级。
 - `resources.Request`: 从 Pod/Workload 解析出的资源和拓扑需求。
 - `scoring.Model`: 可测试、可解释、与 Kubernetes framework 解耦的打分逻辑。
 
@@ -150,7 +150,7 @@ framework.NodeInfo + Pod
 - Kueue adapter：读取 Workload、Admission、ClusterQueue 状态。
 - JobSet adapter：构造和观察 JobSet。
 - DRA adapter：读取 ResourceClaim、ResourceSlice 或厂商驱动暴露的信息。
-- Inventory adapter：接入资产系统、节点标签、GPU fabric 数据源。
+- Inventory adapter：接入资产系统、节点标签、GPU 设备拓扑数据源。
 
 一个 adapter 的接口要小，例如“给定节点名返回 GPU 拓扑事实”，不要把整个 Kubernetes client 暴露给算法层。
 

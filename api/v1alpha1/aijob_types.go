@@ -32,7 +32,7 @@ type AIJobSpec struct {
 	// +kubebuilder:validation:Pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="queueName is immutable"
 	QueueName string `json:"queueName,omitempty"`
-	// Topology requests a supported node-fabric preference or rack constraint.
+	// Topology requests a supported node selection preference or rack constraint.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="topology is immutable"
 	Topology Topology `json:"topology,omitempty"`
 	// Image is the training image executed by every worker.
@@ -46,9 +46,9 @@ type AIJobSpec struct {
 	JobSetOverrides *JobSetOverrides `json:"jobSetOverrides,omitempty"`
 }
 
-// Topology requests a supported node-fabric preference or rack constraint.
+// Topology requests a supported node selection preference or rack constraint.
 type Topology struct {
-	// Preference asks the scheduler to prefer a GPU fabric when possible.
+	// Preference asks the scheduler to prefer a coarse GPU topology class when possible.
 	// +kubebuilder:validation:Enum=any;nvlink;pcie
 	// +kubebuilder:default=any
 	Preference string `json:"preference,omitempty"`

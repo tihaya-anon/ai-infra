@@ -14,7 +14,7 @@
 ## 3. Component Observability
 
 - [x] 3.1 Register low-cardinality Controller reconciliation, error, JobSet-change, status-change, and duration metrics, then test operation/result classification and registration.
-- [x] 3.2 Register low-cardinality Scheduler plugin score, topology/fabric, error, and duration metrics, then test bounded label normalization and error accounting.
+- [x] 3.2 Register low-cardinality Scheduler plugin score, topology-class, error, and duration metrics, then test bounded label normalization and error accounting.
 - [x] 3.3 Expose Controller and authenticated Scheduler metrics through Kubernetes Services and verify that both endpoints can be retrieved without installing Prometheus.
 
 ## 4. API-Level And Kind Verification

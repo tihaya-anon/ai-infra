@@ -19,20 +19,26 @@ func TestGivenTopologyPreferencesWhenScoringNodesThenExpectedScoresAreReturned(t
 		{
 			name:       "prefer NVLink",
 			preference: "nvlink",
-			labels:     map[string]string{topology.FabricLabel: "nvlink"},
-			want:       framework.MaxNodeScore,
+			labels: map[string]string{
+				topology.GPUTopologyClassLabel: topology.TopologyClassNVLinkCapable,
+			},
+			want: framework.MaxNodeScore,
 		},
 		{
 			name:       "PCIe is fallback for NVLink",
 			preference: "nvlink",
-			labels:     map[string]string{topology.FabricLabel: "pcie"},
-			want:       50,
+			labels: map[string]string{
+				topology.GPUTopologyClassLabel: topology.TopologyClassPCIeOnly,
+			},
+			want: 50,
 		},
 		{
 			name:       "NVLink satisfies PCIe",
 			preference: "pcie",
-			labels:     map[string]string{topology.FabricLabel: "nvlink"},
-			want:       framework.MaxNodeScore,
+			labels: map[string]string{
+				topology.GPUTopologyClassLabel: topology.TopologyClassNVLinkCapable,
+			},
+			want: framework.MaxNodeScore,
 		},
 		{
 			name:       "same rack belongs to Kueue",
@@ -69,35 +75,45 @@ func TestGivenTopologyRequirementsWhenFilteringNodesThenExpectedStatusIsReturned
 		{
 			name:     "no requirement",
 			required: "",
-			labels:   map[string]string{topology.FabricLabel: "pcie"},
+			labels: map[string]string{
+				topology.GPUTopologyClassLabel: topology.TopologyClassPCIeOnly,
+			},
 			wantCode: fwk.Success,
 		},
 		{
-			name:     "NVLink requires NVLink fabric",
+			name:     "NVLink requires NVLink-capable node class",
 			required: "nvlink",
-			labels:   map[string]string{topology.FabricLabel: "nvlink"},
+			labels: map[string]string{
+				topology.GPUTopologyClassLabel: topology.TopologyClassNVLinkCapable,
+			},
 			wantCode: fwk.Success,
 		},
 		{
-			name:     "NVLink rejects PCIe fabric",
+			name:     "NVLink rejects PCIe-only node class",
 			required: "nvlink",
-			labels:   map[string]string{topology.FabricLabel: "pcie"},
+			labels: map[string]string{
+				topology.GPUTopologyClassLabel: topology.TopologyClassPCIeOnly,
+			},
 			wantCode: fwk.Unschedulable,
 		},
 		{
-			name:     "PCIe accepts NVLink fabric",
+			name:     "PCIe accepts NVLink-capable node class",
 			required: "pcie",
-			labels:   map[string]string{topology.FabricLabel: "nvlink"},
+			labels: map[string]string{
+				topology.GPUTopologyClassLabel: topology.TopologyClassNVLinkCapable,
+			},
 			wantCode: fwk.Success,
 		},
 		{
-			name:     "PCIe accepts PCIe fabric",
+			name:     "PCIe accepts PCIe-only node class",
 			required: "pcie",
-			labels:   map[string]string{topology.FabricLabel: "pcie"},
+			labels: map[string]string{
+				topology.GPUTopologyClassLabel: topology.TopologyClassPCIeOnly,
+			},
 			wantCode: fwk.Success,
 		},
 		{
-			name:     "PCIe rejects missing fabric",
+			name:     "PCIe rejects missing node class",
 			required: "pcie",
 			labels:   map[string]string{},
 			wantCode: fwk.Unschedulable,

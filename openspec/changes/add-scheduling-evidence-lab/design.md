@@ -45,7 +45,7 @@ resource-allocation comparison.
 
 This makes the lesson about choosing and measuring the correct extension point: standard
 NodeResourcesFit already implements resource packing, while the custom plugin remains responsible
-only for the cluster-specific fabric preference. A new fragmentation plugin was rejected because
+only for the cluster-specific topology-class preference. A new fragmentation plugin was rejected because
 it would duplicate standard behavior and weaken the repository's component-boundary lesson.
 
 Profiles run sequentially under the same `ai-scheduler` name. The runner applies one pinned
@@ -108,7 +108,7 @@ The collector derives:
 
 Controller metrics register with controller-runtime's metrics registry. Scheduler plugin metrics
 register with the Kubernetes component metrics registry already served by kube-scheduler. Labels
-are enums such as operation, result, preference, and observed fabric; resource names are never
+are enums such as operation, result, preference, and observed topology class; resource names are never
 metric labels.
 
 The Controller deployment exposes its metrics port through a ClusterIP Service. Scheduler metrics
