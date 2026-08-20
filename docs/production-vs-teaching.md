@@ -59,7 +59,7 @@ Scheduler plugin 的入口应继续对齐 Scheduler Framework：`PreScore` / `Sc
 | API 版本 | 单个 `v1alpha1`，字段少 | 多版本兼容、conversion、defaulting、validation webhook、废弃策略 |
 | 清单生成 | Go 类型/marker 生成 CRD 与 RBAC，Go manifest 包生成 Kueue 实例；运行身份和 Deployment 保持静态 | `controller-gen` 生成 CRD/RBAC/webhook，Helm/Kustomize 组装环境差异并 review 生成 diff |
 | Controller | 单一 happy path，少量 status | 幂等、冲突重试、server-side apply、finalizer、事件、条件语义稳定 |
-| Scheduler | 一个 `ScorePlugin` 演示节点偏好 | `PreFilter`/`Filter`/`PreScore`/`Score` 组合，缓存、性能预算、可解释打分 |
+| Scheduler | 一个小型插件用 `PreFilter`/`Filter`/`PreScore`/`Score` 演示节点偏好 | 缓存、性能预算、可解释打分、真实设备拓扑模型 |
 | 资源发现 | kind label 和模拟 Device Plugin | DRA、device plugin、NodeResourceTopology、厂商 API 或 inventory adapter |
 | Kueue | 两个业务队列、一个实验队列和简单 cohort | 多租户隔离、动态配额、准入策略、拓扑策略升级 |
 | 镜像构建 | BuildKit 缓存、去符号静态二进制、distroless nonroot | 多架构、SBOM、provenance、签名、漏洞扫描、按 digest 发布 |

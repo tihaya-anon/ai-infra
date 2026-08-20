@@ -1000,10 +1000,17 @@ kubectl apply -f examples/aijob.yaml
 插件通过编译期断言实现 Framework 接口：
 
 ```go
+var _ framework.PreFilterPlugin = &Plugin{}
+var _ framework.FilterPlugin = &Plugin{}
+var _ framework.PreScorePlugin = &Plugin{}
 var _ framework.ScorePlugin = &Plugin{}
 ```
 
-它只对已经通过默认硬约束的 Node 增加分数：
+`PreFilter` 和 `PreScore` 负责解析 Pod annotation，并把结果写入本次调度周期的
+`CycleState`。`Filter` 和 `Score` 不再重新读取 Pod annotation，只读取 `CycleState`
+中的拓扑意图，再和候选 Node 的 `gpu-topology-class` 匹配。
+
+`Filter` 会处理 `topology.required`，`Score` 会对已经通过默认硬约束的 Node 增加分数：
 
 | AIJob 偏好 | Node 标签 | 分数 |
 | --- | --- | ---: |
@@ -1033,14 +1040,23 @@ Scheduler profile 再启用对应扩展点：
 profiles:
   - schedulerName: ai-scheduler
         plugins:
+          preFilter:
+            enabled:
+              - name: GPUTopology
+          filter:
+            enabled:
+              - name: GPUTopology
+          preScore:
+            enabled:
+              - name: GPUTopology
           score:
             enabled:
               - name: GPUTopology
                 weight: 5
 ```
 
-`GPUTopology` 只实现 `ScorePlugin`，因此只能在 `score` 扩展点启用。把它同时写进
-`preScore` 会要求插件实现另一个接口，Scheduler 会在启动时拒绝这份配置。
+如果 profile 忘记启用 `preFilter` 或 `preScore`，后续阶段会找不到 `CycleState`
+中的解析结果并返回配置错误。
 
 这个实验额外运行一个 `ai-scheduler`，不替换 kind 自带的 `default-scheduler`。JobSet 创建的 Worker Pod 通过 PodTemplate 中的 `schedulerName` 使用它。
 
@@ -1140,7 +1156,7 @@ JobSet 和 Kueue 控制器镜像也会在安装官方清单前预加载到 kind 
 | `deploy/access.yaml` | Namespace、ServiceAccount、ClusterRoleBinding、RoleBinding | 静态部署接线：把生成的 Controller 权限和 Kubernetes 内置 Scheduler 权限绑定到运行身份。 |
 | `deploy/kueue-resources.yaml` | `Topology`、`ResourceFlavor`、`ClusterQueue`、`LocalQueue` | 由 `internal/manifests/kueue.go` 生成，创建 Kueue 的资源实例。它们的 CRD 已经由前面的 Kueue 安装步骤提供。 |
 | `deploy/controller.yaml` | `Deployment/aijob-controller` 和 metrics `Service` | 在集群里启动 `/controller` 进程。这个进程 watch `AIJob`，并创建/更新 JobSet。 |
-| `deploy/scheduler-config.yaml` | Scheduler `ConfigMap`、`Deployment/ai-scheduler` 和 metrics `Service` | 在集群里启动 `/scheduler` 进程，并通过配置启用 `GPUTopology` score 插件。 |
+| `deploy/scheduler-config.yaml` | Scheduler `ConfigMap`、`Deployment/ai-scheduler` 和 metrics `Service` | 在集群里启动 `/scheduler` 进程，并通过配置启用 `GPUTopology` 调度扩展点。 |
 | `deploy/device-plugin.yaml` | `DaemonSet/simulated-gpu-device-plugin` | 在实验 Worker Node 上向 kubelet 注册四个 `example.com/gpu` 模拟设备。 |
 
 注意，Kubernetes 不根据 YAML 文件名创建资源。文件名只是给人看的分组；API Server 只看每个

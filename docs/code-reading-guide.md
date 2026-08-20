@@ -45,12 +45,12 @@ AIJob YAML
 ### 4. 跟踪拓扑意图到调度器
 
 1. [`internal/topology/constants.go`](../internal/topology/constants.go)：Controller、Scheduler Plugin、部署清单之间共享的 Label、Annotation 和模拟 GPU 资源名。遇到字符串时先回到这里确认协议含义。
-2. [`internal/plugin/gputopology/plugin.go`](../internal/plugin/gputopology/plugin.go)：实现 Scheduler Framework `ScorePlugin`。阅读 `preference` 和 `topologyScore`，确认它只对已通过默认过滤的 Node 打分。
+2. [`internal/plugin/gputopology/plugin.go`](../internal/plugin/gputopology/plugin.go)：实现 Scheduler Framework 的 pre、filter 和 score 扩展点。阅读 `topologyStateFromPod`、`topologyRequirementStatus` 和 `topologyPreferenceScore`，确认 Pod annotation 只在 pre hook 解析，Filter/Score 只使用 `CycleState`。
 3. [`internal/plugin/gputopology/plugin_test.go`](../internal/plugin/gputopology/plugin_test.go)：列出 NVLink、PCIe 和 `same-rack` 的评分边界；后者不由该插件处理。
 4. [`cmd/scheduler/main.go`](../cmd/scheduler/main.go)：将插件工厂注册进自定义 kube-scheduler 二进制。
 5. [`deploy/scheduler-config.yaml`](../deploy/scheduler-config.yaml)：用 `ai-scheduler` profile 启用插件并设置权重，同时展示调度器进程的部署方式。
 
-这一段的关键连接是：Controller 写入 Pod Annotation 和 `schedulerName`，调度器 profile 选中 Pod，插件再读取 Annotation 并返回节点分数。
+这一段的关键连接是：Controller 写入 Pod Annotation 和 `schedulerName`，调度器 profile 选中 Pod，插件在 pre hook 解析 Annotation，然后用 `CycleState` 驱动 Filter 和 Score。
 
 ### 5. 最后补齐运行和部署边界
 
